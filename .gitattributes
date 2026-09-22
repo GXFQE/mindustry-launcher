@@ -1,0 +1,20 @@
+# ── 换行 ──────────────────────────────────────────────────────────
+# 仓库内统一存 LF，检出时按平台自动转换（Windows 上得到 CRLF）。
+#
+# ⚠️ 为什么不能只靠 core.autocrlf：那是**每台机器各自**的设置（Git for
+#    Windows 默认装成 true，Linux/macOS 默认 false）。别人 clone 时走的是
+#    他自己的配置，于是同一个文件在不同机器上的换行不一致、diff 里整文件
+#    都是「改动」。显式声明才能保证所有人在仓库里看到同一份内容。
+* text=auto
+
+# ── 二进制文件 ────────────────────────────────────────────────────
+# 明确标为 binary，绝不做换行转换 —— 转换会直接损坏内容。
+# 不写这几行时 git 靠「内容里有没有 NUL 字节」猜，猜错就是文件损坏。
+*.ico  binary
+*.exe  binary
+*.dll  binary
+*.pyd  binary
+*.zip  binary
+*.jar  binary
+*.png  binary
+*.jpg  binary

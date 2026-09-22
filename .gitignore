@@ -1,0 +1,48 @@
+# ── 构建产物（可重建，别进仓库）────────────────────────────
+build/
+dist/
+_dist_*/
+*.pyz
+
+# ── Python 缓存 ────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ── 运行时资源（体积大、可重新获取，不进仓库）───────────────
+# exe 与 _internal/ 由 `python _tools/build.py` 现打；
+# jre/ 放在运行时目录（同级，找法见 _tools/_paths.py），不在这里。
+_internal/
+jre/
+*.exe
+*.exe.bak
+
+# ── 运行时数据与状态 ──────────────────────────────────────
+# launcher.log     = 打包后的 exe 写的（实际使用的日志）
+# launcher.dev.log = 源码/测试运行写的（开发噪音）
+launcher.log
+launcher.log.*
+launcher.dev.log
+config.json
+versions/
+backups/
+Backups/
+# logs/ = 游戏输出日志（launcher/gamelog.py 写的），每次启动一份
+logs/
+# extensions/ = 本地扩展（launcher/extensions.py 载入的 *.py），
+# 是使用者自己的东西，不该混进仓库
+extensions/
+
+# ── 交付包 ────────────────────────────────────────────────
+# 由 _tools/make_source_zip.py / make_release_zip.py 生成
+*.zip
+
+# ── 本地归档与代理状态 ────────────────────────────────────
+# _history/ = 开发过程的历史档案：拆分前的单体源码快照、旧日志、旧配置、
+#   退役的一次性脚本与量测脚本。
+#   ★ 这些档案**不包含在本仓库内** —— 仓库只收「程序 + 开发工具 + 文档」。
+#     这条规则的作用是防止 `git add -A` 把本地那份一并带上去。
+# ⚠️ 整个目录排除，不要只靠 `*.exe` 这类后缀规则：`xxx.exe.单文件版`
+#    这种名字不以 .exe 结尾，匹配不到。
+_history/
+.workbuddy/

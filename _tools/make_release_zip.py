@@ -25,16 +25,28 @@
     config.json、launcher.log   用户状态
     *.spec、README.md           构建期的东西
 
+一次生成**两个包**：
+    Mindustry启动器_发布包_<日期>.zip     完整包，给新用户（解压即用）
+    mindustry-launcher-v<版本>-update.zip  精简更新包，给已装旧版的用户自更新
+
+更新包只装「相对上一版真正变动的文件」（exe 几乎每次都变，`_internal/` 只在改依赖时
+才变），再往上一版没带 manifest.json 时用 `--baseline-from-zip` 拿它的发布包反推基线。
+
 用法：
     python _tools/make_release_zip.py
     python _tools/make_release_zip.py --runtime-dir D:\\somewhere
     python _tools/make_release_zip.py --outdir D:\\somewhere
+    python _tools/make_release_zip.py --baseline "上一版的 manifest.json"
+    python _tools/make_release_zip.py --baseline-from-zip "上一版的发布包.zip"
+    python _tools/make_release_zip.py --no-update      # 只出完整包
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import re
 import sys
 import time
 import zipfile
@@ -61,6 +73,225 @@ INCLUDE_DIRS = [
     "_internal",
     "jre",
 ]
+
+# --------------------------------------------------------------------------
+# 自更新（启动器自己更新自己）—— 清单 + 精简更新包
+# --------------------------------------------------------------------------
+# 只有「程序文件」参与自更新：exe + _internal/。
+# ★ 刻意**不含 jre/**：它不随版本变，而且用户可能已经自己换过一份
+#   （resource_path 是「exe 旁边优先」），更新包去覆盖它只会帮倒忙。
+UPDATE_DIRS = ["_internal"]
+APP_ID = "mindustry-launcher"
+UPDATE_FORMAT = 1
+# 本地留档的 manifest（生成下一版的更新包时，拿它当基线算出「哪些文件变了」）
+MANIFEST_DIR = ROOT / "_history" / "releases"
+
+
+def read_version() -> str:
+    """从 ``launcher/version.py`` 读版本号。
+
+    不 import 那个模块（免得为了一个字符串把那包拖进来），直接按文本抓 ——
+    格式就固定是 ``__version__ = "1.2.3"``（见该文件的模块注释）。
+    """
+    text = (ROOT / "launcher" / "version.py").read_text(encoding="utf-8")
+    m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.M)
+    if not m:
+        raise SystemExit("从 launcher/version.py 里读不到 __version__")
+    return m.group(1)
+
+
+def _ver_tuple(text: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", str(text))) or ()
+
+
+def program_items(base: Path) -> list[tuple[Path, str]]:
+    """参与自更新的文件（exe + ``_internal/``），相对路径是**相对运行时目录**。
+
+    这个相对路径就是要写回用户那边的位置（exe 同级），所以两边必须
+    用同一套规则 —— 启动器那边是 ``selfupdate._is_replaceable`` 白名单。
+    """
+    items: list[tuple[Path, str]] = []
+    exe = base / EXE_NAME
+    if exe.is_file():
+        items.append((exe, EXE_NAME))
+    for rel in UPDATE_DIRS:
+        src = base / rel
+        if not src.is_dir():
+            continue
+        for f in _iter_dir(src):
+            items.append((f, f"{rel}/{f.relative_to(src).as_posix()}"))
+    return items
+
+
+def build_manifest(items: list[tuple[Path, str]], version: str) -> dict:
+    """给「这一版的程序文件」生成清单（完整包里带一份，同时本地留档）。"""
+    return {
+        "format": UPDATE_FORMAT,
+        "app_id": APP_ID,
+        "version": version,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "files": [
+            {"path": rel, "sha256": _sha256(src), "size": src.stat().st_size}
+            for src, rel in items
+        ],
+    }
+
+
+def manifest_from_release_zip(zip_path: Path) -> dict:
+    """从「上一版的发布包 zip」反推程序文件清单，当作基线。
+
+    完整包自 1.0.1 起会带一份 `manifest.json`，正常不该用到这个。但更早
+    发出去的包（1.0.0 就是）里没有它 —— 那时还没有自更新功能。这时可以
+    退而求其次：直接量上一版发布包里每个文件的 sha256。
+
+    发布包内层级是 `<TOP>/...`，而清单里的路径是**相对安装根**的，所以
+    要削掉第一级目录名；只收 exe 与 `_internal/`（与
+    `program_items` / 更新器的白名单一致），`jre/`、`使用说明.txt`、
+    `LICENSE` 本来就不参与自更新，忽略掉。
+    """
+    files: list[dict] = []
+    with zipfile.ZipFile(zip_path) as z:
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            parts = info.filename.split("/")
+            if len(parts) < 2:
+                continue
+            rel = "/".join(parts[1:])
+            if rel != EXE_NAME and not rel.startswith("_internal/"):
+                continue
+            data = z.read(info)
+            files.append({
+                "path": rel,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+            })
+    if not files:
+        raise SystemExit(
+            f"{zip_path} 里找不到程序文件（exe / _internal/）—— 它不像发布包。"
+        )
+    m = re.search(r"(\d+\.\d+(?:\.\d+)*)", zip_path.name)
+    return {
+        "format": UPDATE_FORMAT,
+        "app_id": APP_ID,
+        "version": m.group(1) if m else "unknown",
+        "created": f"（由发布包反推：{zip_path.name}）",
+        "files": files,
+    }
+
+
+def load_baseline(
+    version: str, explicit: Path | None
+) -> tuple[dict | None, str]:
+    """找「上一版」的 manifest 当基线。返回 ``(manifest, 来源说明)``。
+
+    优先用 ``--baseline`` 明确指定的；否则在本地留档目录里挑**版本号比
+    当前小、且最大的**那一份。都找不到就返回 ``(None, ...)`` —— 调用方
+    会退化成「全量更新包」（大一点，但一定正确）。
+    """
+    if explicit is not None:
+        try:
+            return json.loads(explicit.read_text(encoding="utf-8")), str(explicit)
+        except (OSError, json.JSONDecodeError) as e:
+            raise SystemExit(f"读不了基线 manifest {explicit}：{e}")
+    if not MANIFEST_DIR.is_dir():
+        return None, "没有本地留档目录"
+    current = _ver_tuple(version)
+    best: tuple[tuple[int, ...], Path] | None = None
+    for path in sorted(MANIFEST_DIR.glob("manifest-*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        ver = _ver_tuple(data.get("version") or "")
+        if not ver or ver >= current:        # 只认**更旧**的版本当基线
+            continue
+        if best is None or ver > best[0]:
+            best = (ver, path)
+    if best is None:
+        return None, "本地没有更旧版本的 manifest"
+    return json.loads(best[1].read_text(encoding="utf-8")), best[1].name
+
+
+def write_update_package(
+    base: Path,
+    out_dir: Path,
+    version: str,
+    baseline: dict | None,
+    level: int,
+) -> tuple[Path, int, int]:
+    """生成精简更新包。返回 ``(路径, 打包文件数, 原始字节数)``。
+
+    只装**相对基线有变化**的文件（exe 几乎每次都变，``_internal/`` 只在
+    改依赖时才变），外加 ``update.json`` 说明要写哪些、删哪些。基线拿不到
+    时把所有程序文件都装进去 —— 大一点，但绝不会漏。
+    """
+    items = program_items(base)
+    entries = [
+        {"path": rel, "sha256": _sha256(src), "size": src.stat().st_size,
+         "_src": src}
+        for src, rel in items
+    ]
+    base_hashes: dict[str, str] = {}
+    if baseline:
+        for f in baseline.get("files") or []:
+            if isinstance(f, dict) and f.get("path"):
+                base_hashes[str(f["path"])] = str(f.get("sha256") or "")
+    if base_hashes:
+        changed = [e for e in entries if base_hashes.get(e["path"]) != e["sha256"]]
+        remove = sorted(set(base_hashes) - {e["path"] for e in entries})
+    else:
+        # 没有基线 → 全量（宁可多传几 MB，也不能少换一个文件）
+        changed = list(entries)
+        remove = []
+    # exe 永远要带上：即使内容没变（理论上不会），少了它这一版就没意义
+    if not any(e["path"] == EXE_NAME for e in changed):
+        exe_entry = next((e for e in entries if e["path"] == EXE_NAME), None)
+        if exe_entry is not None:
+            changed.insert(0, exe_entry)
+
+    manifest = {
+        "format": UPDATE_FORMAT,
+        "app_id": APP_ID,
+        "version": version,
+        "base_version": str((baseline or {}).get("version") or ""),
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "files": [
+            {"path": e["path"], "sha256": e["sha256"], "size": e["size"]}
+            for e in changed
+        ],
+        "remove": remove,
+    }
+    zip_path = out_dir / f"{APP_ID}-v{version}-update.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    raw = sum(e["size"] for e in changed)
+    with zipfile.ZipFile(
+        zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=level
+    ) as z:
+        z.writestr(
+            "update.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+        for e in changed:
+            z.write(e["_src"], f"files/{e['path']}")
+
+    # 逐条校验：解出来的字节必须跟磁盘一致（跟完整包同一套纪律）
+    bad: list[str] = []
+    with zipfile.ZipFile(zip_path) as z:
+        for e in changed:
+            entry = f"files/{e['path']}"
+            if entry not in z.namelist():
+                bad.append(f"{e['path']}（zip 里没有）")
+            elif hashlib.sha256(z.read(entry)).hexdigest() != e["sha256"]:
+                bad.append(f"{e['path']}（内容不一致）")
+        if json.loads(z.read("update.json").decode("utf-8")) != manifest:
+            bad.append("update.json（读回来跟写进去的不一样）")
+    if bad:
+        raise SystemExit("更新包校验失败：\n  - " + "\n  - ".join(bad))
+    return zip_path, len(changed), raw
 
 
 def default_runtime_dir() -> Path:
@@ -141,12 +372,22 @@ USAGE = """Mindustry 启动器 —— 使用说明
   窗口一打开，它就会在后台提前把当前选中版本的游戏文件拼好。
   等你点 "启动游戏" 时直接复用，能省掉几秒等待。
 
+· 启动器自己会更新
+  有新版本时，它会在后台悄悄下好，等你下次关掉启动器自动换上 ——
+  不用再手动下载解压。只下**这一版真正变了的那几个文件**（通常就是
+  主程序本体，一两 MB），所以很快。你的游戏版本、存档备份、设置
+  一个字节都不会动，自己换过的 jre 也不会被覆盖。
+  想改成「只提示、由我自己决定」，或者彻底关掉，去 "设置" 里改
+  "启动器更新"（默认是自动）。
+
 
 【设置里能改什么】
 
 · 存档分类：分类名称、数据目录、最小备份时间、最大备份数量
 · 启动游戏时隐藏窗口；游戏退出后自动关闭启动器（自动备份做完才关）
 · 启动时自动检查更新
+· 启动器更新 —— 自动帮你把启动器本身升级到新版（默认开；也可以只提示，
+  或彻底关闭）
 · Java 路径(JRE/JDK) —— JRE 和 JDK 都行，填根目录即可；旁边有 "浏览"
   和 "检测"，"检测" 会真跑一次 java -version 告诉你这份能不能用
 · GitHub 镜像 —— 下载加速用，留空＝直连 GitHub
@@ -170,6 +411,11 @@ USAGE = """Mindustry 启动器 —— 使用说明
   放到 exe 旁边覆盖掉即可，不用重新打包程序；装了 JDK 的话，也可以在
   设置里直接填 JDK 的目录。填错不用怕 —— 启动器会退回内置那份，
   连内置的都没有时，还会去 JAVA_HOME / PATH 里找现成的 Java。
+
+· 启动器升级新版时，只替换程序文件（exe 与 _internal 目录），并且是
+  先换 _internal、最后才换 exe。期间不动游戏版本、存档备份、设置文件，
+  也不碰 jre 目录。万一替换失败，它会自动退回原来的版本并记一笔到
+  launcher.log。
 
 · 数据目录如果指向游戏原生的 Mindustry 目录，删除操作会额外再警告一次。
 
@@ -243,6 +489,16 @@ def main() -> int:
                     help="从哪儿取 exe/_internal/jre（默认自动找运行时目录）")
     ap.add_argument("--name", default=None, help="zip 文件名（默认自动带日期）")
     ap.add_argument("--level", type=int, default=6, help="压缩级别 1-9（默认 6）")
+    ap.add_argument("--baseline", default=None, type=Path,
+                    help="算更新包差异用的上一版 manifest.json"
+                         "（默认自动在 _history/releases/ 里找）")
+    ap.add_argument("--baseline-from-zip", default=None, type=Path,
+                    help="上一版**发布包 zip** —— 它没带 manifest.json 时用它反推基线")
+    ap.add_argument("--baseline-version", default=None,
+                    help="配合 --baseline-from-zip：上一版的版本号"
+                         "（发布包文件名里没有版本号时用得上）")
+    ap.add_argument("--no-update", action="store_true",
+                    help="只出完整包，不生成精简更新包")
     args = ap.parse_args()
 
     base = Path(args.runtime_dir).resolve() if args.runtime_dir \
@@ -255,6 +511,14 @@ def main() -> int:
     print(f"项目根  ：{ROOT}")
     print(f"运行时目录：{base}")
     items = collect(base)
+
+    # ---- 自更新清单 ----
+    # 完整包里带一份 manifest.json：下一版生成更新包时，它就是「基线」的来源。
+    # ⚠️ 清单只覆盖**程序文件**（exe + _internal/），不含 jre / LICENSE /
+    #    使用说明 —— 更新器也只替换那两样，两边的范围必须一致。
+    version = read_version()
+    manifest = build_manifest(program_items(base), version)
+    print(f"版本    ：v{version}（程序文件 {len(manifest['files'])} 个）")
 
     # 许可协议从**项目根**取（运行时目录里没有这个文件）。GPL-3.0 要求
     # 分发时随附协议全文，所以发布包必须带上它 —— 加进 items，下面的
@@ -284,6 +548,11 @@ def main() -> int:
             z.write(src, f"{TOP}/{rel}")
         # 使用说明是现生成的，直接写进 zip
         z.writestr(f"{TOP}/使用说明.txt", USAGE.encode("utf-8-sig"))
+        # 程序文件清单（使用者不用管它，但下一版发版要靠它算差异）
+        z.writestr(
+            f"{TOP}/manifest.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
 
     took = time.time() - t0
     size = zip_path.stat().st_size
@@ -315,8 +584,65 @@ def main() -> int:
             print(f"        - {b}")
         return 1
     print(f"  逐条 sha256：{len(items)}/{len(items)} 全部一致")
+
+    # 留档：下一版算更新包差异时要用它当基线（这个目录不进 git，纯本地档案）
+    MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+    archive = MANIFEST_DIR / f"manifest-{version}.json"
+    archive.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"  清单留档：{archive}")
+
+    if args.no_update:
+        print()
+        print("发布包已生成（--no-update：没生成更新包）。"
+              "使用者解压后双击 exe 即可运行。")
+        return 0
+
+    # ---- 精简更新包：只装相对上一版真正变动的文件 ----
+    # 显式给了发布包就优先用它反推（比自动翻留档更可信：那是真发出去的东西）；
+    # 否则再自动翻本地留档，最后才退化成全量包。
+    baseline: dict | None = None
+    source = ""
+    if args.baseline_from_zip:
+        zpath = Path(args.baseline_from_zip)
+        if not zpath.is_file():
+            raise SystemExit(f"找不到发布包：{zpath}")
+        baseline = manifest_from_release_zip(zpath)
+        source = f"由发布包反推：{zpath.name}"
+        bver = str(args.baseline_version or baseline.get("version") or "")
+        if not _ver_tuple(bver):
+            # 认不出版本号就不留档 —— 留一份 manifest-unknown.json 只会碍事
+            print(f"  [提醒] 认不出上一版的版本号（{zpath.name}），这次不留档；"
+                  f"可用 --baseline-version 指定")
+        else:
+            baseline["version"] = bver
+            MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+            dest = MANIFEST_DIR / f"manifest-{bver}.json"
+            if dest.exists():
+                print(f"  [提醒] 覆盖掉旧的留档 {dest.name}"
+                      f"（它不一定对应这一版的发布包）")
+            dest.write_text(
+                json.dumps(baseline, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"  基线已补进留档：{dest}")
+    else:
+        baseline, source = load_baseline(version, args.baseline)
+    upd_path, upd_count, upd_raw = write_update_package(
+        base, out_dir, version, baseline, args.level
+    )
+    base_ver = (baseline or {}).get("version") or "（无）"
     print()
-    print("发布包已生成。使用者解压后双击 exe 即可运行。")
+    print(f"更新包：{upd_path.name}")
+    print(f"      基线 v{base_ver} ← {source}")
+    print(f"      含 {upd_count} 个文件（原始 {_human(upd_raw)}），"
+          f"打包后 {_human(upd_path.stat().st_size)}")
+    if baseline is None:
+        print("      [提醒] 没找到上一版清单，这次按全量打包（能更新，只是大）")
+    print("      逐条 sha256 校验通过")
+    print()
+    print("两个包都已生成：完整包给新用户，更新包给启动器自更新。")
     return 0
 
 

@@ -102,6 +102,9 @@ class CoreMixin:
         # 诊断模式（见文件末尾 _bench_jar）。只影响量测那一轮，
         # 顺手把会在量测途中弹窗的「自动检查更新」关掉。
         self._bench = bool(os.environ.get("MDT_BENCH_JAR"))
+        # 「已经下载好、等着退出时替换」的启动器自更新计划（见 gui_updates
+        # 与 selfupdate）。None = 这次没有要应用的更新。
+        self.self_update_plan: str | None = None
         self.root = tk.Tk()
         self.font = ("Microsoft YaHei", 10)
         self.gui_queue = queue.Queue()
@@ -304,17 +307,23 @@ class CoreMixin:
             self.root.after(50, self._process_gui_queue)
 
     def _start_post_window_tasks(self) -> None:
-        """窗口已经能用之后才做的可选工作（扩展载入 → 后台 GC）。
+        """窗口已经能用之后才做的可选工作（扩展载入 → 后台 GC → 自更新检查）。
 
         ★ 单独一个入口，而不是把这些塞进 ``_start_background_gc``：
           那个方法只该管「GC 要不要让路」，它的行为被回归测试逐条断言着
-          （让路延时、恢复提交、二次确认）。扩展属于另一件事，混进去
-          会让两边都不好单独测。
+          （让路延时、恢复提交、二次确认）。扩展和自更新属于另外的事，
+          混进去会让两边都不好单独测。
+
+        顺序也是有意排的：扩展载入和 GC 都是**本地**动作，先跑；自更新要
+        发网络请求（丢后台线程），放最后，免得网络慢的时候挡住前面两件。
         """
         if self.stop_event.is_set():
             return
         self._load_extensions_once()
         self._start_background_gc()
+        # 自更新最后跑：查一次远端、有必要就下到暂存区。真正的替换要等
+        # 退出时（见 gui_updates._apply_staged_update）。
+        self._self_update_startup()
 
     def _load_extensions_once(self) -> None:
         """载入 ``extensions/*.py``（只跑一次；绝不抛异常）。

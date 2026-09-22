@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from . import sources as _sources
-from .utils import atomic_write_json, parse_bool
+from .utils import (
+    LAUNCHER_UPDATE_DEFAULT,
+    atomic_write_json,
+    normalize_launcher_update,
+    parse_bool,
+)
 from .version import CONFIG_VERSION
 
 logger = logging.getLogger(__name__)
@@ -367,6 +372,13 @@ class ConfigManager:
         # 不会动它 —— 那是用户的候选清单，不是界面上的临时勾选。
         "github_mirror_presets": list(DEFAULT_MIRROR_PRESETS),
         "auto_update": True,
+        # ★ 启动器**自身**的更新档位 —— 注意跟上面的 "auto_update" 不是
+        #   一回事：那个管「**游戏**版本有没有新版」，这个管「**启动器**自己
+        #   有没有新版」。auto = 后台检查 + 下载、退出启动器时自动应用；
+        #   check = 只提示；off = 完全停用。
+        #   另外「源码运行一律不检查」是硬编码的（见 selfupdate.mode_of），
+        #   所以在开发机上再怎么配也不会把自己编的版本顶掉。
+        "launcher_update": LAUNCHER_UPDATE_DEFAULT,
         # 自定义启动参数。存字符串（而不是数组）是为了让用户在设置页里
         # 改起来就像改一行命令行；解析见 gamecmd.split_args。
         "extra_vm_args": "",
@@ -430,6 +442,9 @@ class ConfigManager:
         "github_mirror_presets": normalize_mirror_presets,
         "max_log_files": normalize_log_keep,
         "version_sources": _sources.normalize_version_sources,
+        # 三档枚举（auto/check/off）。解析函数在 utils 而不是 selfupdate ——
+        # 那边要 import 本模块，写那边会绕成循环 import。
+        "launcher_update": normalize_launcher_update,
     }
     # 字符串型配置项的额外约束：必须真的是字符串（别的类型写了就退默认，
     # 免得 ``str(["a"])`` 变成 "['a']" 这种用户看了莫名其妙的玩意儿）。

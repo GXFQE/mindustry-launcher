@@ -718,9 +718,46 @@ def main() -> int:
         app.show_settings()
         app.root.update()
         combos = list(walk_by_kind(app.settings_frame, (ttk.Combobox,)))
-        check("设置页里找得到镜像下拉框", len(combos) == 1, f"{len(combos)} 个")
-        if combos:
-            mirror_combo = combos[0]
+
+        def combo_of(var):
+            """按 textvariable 找下拉框 —— ★ 不靠「第几个」。
+
+            这里栽过一次：设置页后来多了个「启动器更新」下拉框，原来写死的
+            ``combos[0]`` 就指到别人身上去了，三项断言一起红。
+            """
+            target = str(var)
+            for c in combos:
+                try:
+                    if str(c.cget("textvariable")) == target:
+                        return c
+                except tk.TclError:
+                    continue
+            return None
+
+        mirror_combo = combo_of(app.github_mirror_var)
+        check("镜像下拉框能按变量定位（不靠控件顺序）",
+              mirror_combo is not None, f"设置页共 {len(combos)} 个下拉框")
+        update_combo = combo_of(app.launcher_update_var)
+        check("设置页里有「启动器更新」下拉框", update_combo is not None)
+        if update_combo is not None:
+            check("它的候选是三档文案（给用户看的，不是英文档位值）",
+                  list(update_combo["values"])
+                  == list(GM.LAUNCHER_UPDATE_LABELS.values()),
+                  str(list(update_combo["values"])))
+            app.launcher_update_var.set(GM.LAUNCHER_UPDATE_LABELS["check"])
+            app.save_settings()
+            app.root.update()
+            saved_launcher_update = json.loads(
+                (root / "config.json").read_text(encoding="utf-8")
+            )
+            check("选了「只提示」存进配置的是 check（不是界面文案）",
+                  saved_launcher_update.get("launcher_update") == "check",
+                  repr(saved_launcher_update.get("launcher_update")))
+            # 还原，别影响后面的检查
+            app.launcher_update_var.set(GM.LAUNCHER_UPDATE_LABELS["auto"])
+            app.config.set("launcher_update", "auto")
+            app.root.update()
+        if mirror_combo is not None:
             # 候选清单是配置项（github_mirror_presets）：沙箱里写的是自己那
             # 一份，下拉框就该显示那一份 —— 而不是代码里写死的内置列表。
             check("下拉框的候选站来自配置（不是代码里写死的）",

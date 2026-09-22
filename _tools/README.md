@@ -86,7 +86,7 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 | `python _tools/make_source_zip.py` | 生成 `Mindustry启动器_源码包_<日期>.zip` |
 | `python _tools/make_source_zip.py -o 名字.zip` | 指定输出名 |
 
-打出一个约 120 KB 的 zip，解压后在根目录跑 `python _tools/build.py`
+打出一个约 280 KB 的 zip，解压后在根目录跑 `python _tools/build.py`
 就能构建，**不需要项目里的任何其它文件**。
 
 收什么：源码 + `Launcher.spec` + 构建资源（`mindustry.ico`）+ 开发工具。
@@ -95,19 +95,23 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 
 生成后会**逐文件比对哈希**，确认 zip 内容与源文件完全一致。
 
-## make_release_zip.py —— 生成「解压即用」的发布包
+## make_release_zip.py —— 生成「解压即用」的发布包 + 精简更新包
 
-给**使用者**的成品，不是给开发者的源码。
+给**使用者**的成品，不是给开发者的源码。跑一次出**两个包**。
 
 | 命令 | 作用 |
 |---|---|
-| `python _tools/make_release_zip.py` | 生成 `Mindustry启动器_发布包_<日期>.zip` |
+| `python _tools/make_release_zip.py` | 出完整包 `Mindustry启动器_发布包_<日期>.zip` + 更新包 `mindustry-launcher-v<版本>-update.zip` |
 | `python _tools/make_release_zip.py --runtime-dir <目录>` | 从哪儿取 exe/`_internal`/`jre`（默认自动找运行时目录） |
 | `python _tools/make_release_zip.py --outdir <目录>` | 换个输出位置 |
-| `python _tools/make_release_zip.py --level 9` | 压得更狠（更慢） |
+| `python _tools/make_release_zip.py --level 9` | 压得更狠（更慢，两个包一起） |
+| `python _tools/make_release_zip.py --baseline <manifest.json>` | 明确指定算差异用的上一版清单 |
+| `python _tools/make_release_zip.py --baseline-from-zip <发布包.zip>` | 上一版**没带 manifest.json** 时，量它的发布包反推基线（可配 `--baseline-version 1.0.0`） |
+| `python _tools/make_release_zip.py --no-update` | 只出完整包 |
 
 收什么：`Mindustry启动器.exe` + `_internal/` + `jre/`（内置 Java）
-+ 现场生成的 `使用说明.txt`。约 **31 MB**（原始 60 MB），解压后双击 exe 就能用，
++ 现场生成的 `使用说明.txt` + 程序文件清单 `manifest.json` + `LICENSE`。
+约 **31 MB**（原始 60 MB），解压后双击 exe 就能用，
 **不需要装 Python，也不需要单独装 Java**。
 不收什么：源码（`launcher/`、`_tools/`）、用户数据（`versions/`、`backups/`、
 `config.json`、`launcher.log`）—— 数据是使用者的资产，绝不能打进交付包。
@@ -116,6 +120,21 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 默认自动认（同 `build.py`）；判据是「那儿有 exe 和 `_internal`」，比只看目录名可靠。
 
 生成后同样**逐文件比对 sha256**（改完东西忘了重新生成，是这类交付最常见的翻车方式）。
+更新包还会把 `update.json` 读回来跟写进去的比一遍。
+
+### 更新包（给老用户，启动器自更新时下它）
+
+包内只有**相对上一版真正变动的文件**（`files/` 下按安装根的相对路径摆好）
++ 一份 `update.json`（要写哪些、要删哪些、版本号、基线版本）。
+
+- **基线哪儿来**：上一版完整包里的 `manifest.json`；同时本地留档在
+  `_history/releases/manifest-<版本>.json`，脚本默认自动挑「版本号更小、且最大」那份。
+- **拿不到基线不猜**：直接退化成**全量**更新包（十几 MB）——大一点，但绝不会漏换文件。
+- **只覆盖程序文件**：`program_items()` 只收 exe 与 `_internal/`，与启动器那边
+  `selfupdate._is_replaceable` 的白名单是**同一套范围**。`jre/` 刻意排除：它不随版本变，
+  而且用户可能已经自己换过一份，去覆盖只会帮倒忙。
+- `_internal/` 里的 `base_library.zip` 与 exe 之外，其余近千个文件通常整版都不变 ——
+  纯代码改动的更新包往往只有 **一两 MB**。
 
 > 两者别搞混：`make_source_zip.py` 给的是「要自己构建的人」，
 > `make_release_zip.py` 给的是「只想双击用的人」。
@@ -123,12 +142,16 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 ## 已退役的一次性脚本
 
 下面这些是**跑完就没用了**的脚本，已经从本仓库移除。
-列在这里不为再跑它们，而是把「当时为什么这么做」留下来 —— 尤其第一条，
-它解释了**为什么运行时刻意不带向上兼容代码**。
+列在这里不为再跑它们，而是把「当时为什么这么做」留下来。
+
+⚠️ 这些是**历史决策**。项目 2026-09-22 开源之后，配置的**代际升级**统一走
+`config.py` 的 `MIGRATIONS` 迁移链（逐级、升完立刻落盘、版本号只升不降），
+**不再写一次性迁移脚本**。下面两个管的是「更老的单文件格式/外部数据」，
+那种迁移不会再有第二次。
 
 | 脚本 | 当年干了什么 | 为什么不再需要 |
 |---|---|---|
-| `migrate_mindustry_json.py` | 把旧版 exe 旁边的 `Mindustry.json` 合并进 `config.json` 的 `jvm` 段，旧文件送回收站。**只在 2026-09-18 那次合并用过一次** | 迁移不可逆且已完成；运行时**刻意没有**向上兼容代码去读旧文件，所以也不会再有第二次迁移 |
+| `migrate_mindustry_json.py` | 把旧版 exe 旁边的 `Mindustry.json` 合并进 `config.json` 的 `jvm` 段，旧文件送回收站。**只在 2026-09-18 那次合并用过一次** | 迁移不可逆且已完成；运行时**不读**这种更老的单文件格式（`config.json` 同一格式的代际升级另走 `MIGRATIONS`），所以不会再被触发 |
 | `import_old_backups.py` | 把旧启动器的备份导入为独立存档分类（CAS 去重，1.3 GB → 57.7 MB） | 一次性数据搬迁，已完成 |
 
 ⚠️ 归档版 `migrate_mindustry_json.py` 里那个顺序仍然成立，将来若真要再迁移一次：
@@ -160,7 +183,8 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 |---|---|---|
 | `code_regression.py` | **主回归，344 项**：jar 条目内容 vs CAS 逐字节核对（真实数据全量 6504 条）、报错分支、GC 让路与恢复、清单指纹、预热状态机、关窗半路中断（带反向对照）、**导入进行中跑 GC**、**恢复备份的安全边界**、**启动参数解析与命令拼装顺序**、**jvm 段归一化**、**游戏输出日志收集**（含**管道编码**：拿真 jre 跑一遍，并用「不传参数时管道里是 GBK」做反向对照）、**镜像候选清单的容错整理**、**锁的作用域**（`_proc_lock` 必须可重入、with 块里不许弹窗）、**开关型配置的脏值容错**（`bool("false")` 是 True —— 会反过来；而且退默认时的告警**要点名配置键**，用户得能拿它去 config.json 里找）、**「保存并返回」的结构**（保存归 `save_settings`、跳转归 `save_and_return`，源码里不许再有「不保存就能离开设置页」的按钮）、**自动关闭必须排在自动备份之后**、**「直接删除」开关**（默认关、脏值退回 False、`delete_path` 的分发要真删得掉、链接只删自己、CAS 回收不受影响）、**Java 路径可改可测**（JRE / JDK 都收；`probe_java` 拿真 JRE 跑 `java -version`，路径写坏要退回默认而不是打不开）、**没 jre 时翻环境变量兜底**（JAVA_HOME 优先于 PATH、坏桩被跳过、只用于本次运行**不写回配置**、两处都没有才报错）、**设置页提示不被裁**（每一条灰字提示都得套 `_auto_wrap_hint`，漏一条就红）、**分割线都要跨满 3 列**（只盖 2 列就会在按钮那一列左边断掉）、**配置格式版本与迁移**（新配置写 `config_version`；第 0 代老配置升级后要**立刻落盘**；不认识的顶层键原样保留、明确废弃的键丢掉；**版本号只升不降**）、**版本来源注册表**（内置来源的档位与版本号解析与重构前逐条一致；config 里能加/覆盖来源）、**扩展点**（坏扩展不影响好扩展；回调抛异常不许冒出来）、**版本号只有一处**、**_paths 懒解析**（刚 clone、没有运行时目录时 import 不能炸） | 改了 `launcher/` 里任何东西之后 |
 | `sandbox_seed.py` | **不是测试**，是给下面几个沙箱脚本用的工具：把真实数据目录里**每个类型最新的版本清单**拷进沙箱，让 `auto_update` 直接给出「已是最新」，不再真去下 200+ MB。默认只放清单（判重只看清单），要启动游戏再传 `with_objects=True`（同卷走硬链接，不占空间） | 被 `release_check` / `exe_edge_check` 自动调用 |
-| `gui_smoke.py` | **界面冒烟，107 项，不起游戏**：主窗口/设置页布局（底部按钮没被裁掉、设置项可滚动、**所有输入框左边缘对齐**）、自定义参数保存与校验（未闭合引号被拦、`-cp` 会警告）、运行日志窗口（两页签、轮询能刷出内容、单实例、**轮询期间不 lift**）、游戏运行中点「设置」不会自锁（锁是放开的）、**滚轮该滚页面而不是改下拉框**（带反向对照 + 下拉列表 popdown 的层级断言）、**镜像下拉框的候选站读的是 config**、**「保存并返回」真的存盘并回到主界面、被拦下时留在设置页**、**Java 路径能编辑 + 点「检测」真跑一次 java -version 并报出版本、填错路径当场拦下、换路径自动体检**、**兜底生效时那一栏显示实际在用的 Java、存过一次兜底就作废**、**「直接删除」开关存得住/回显得出**、**设置页里没有标签被裁掉**（默认 780 与最小 720 各量一遍：需要的宽度 > 分到的宽度 就是被切了尾巴）、**提示折行不会越算越窄**、**输入框 / 分割线都撑到右边**（默认 780 与最小 720 各量一遍，带反向对照：把下拉框缩回单列必须当场报出来）、**游戏退出自动关闭（开/关两路对照 + 备份先做完 + 下载中不关）**、干净退出 | 改了 `gui_*.py`、布局、对话框之后 |
+| `gui_smoke.py` | **界面冒烟，110 项，不起游戏**：主窗口/设置页布局（底部按钮没被裁掉、设置项可滚动、**所有输入框左边缘对齐**）、自定义参数保存与校验（未闭合引号被拦、`-cp` 会警告）、运行日志窗口（两页签、轮询能刷出内容、单实例、**轮询期间不 lift**）、游戏运行中点「设置」不会自锁（锁是放开的）、**滚轮该滚页面而不是改下拉框**（带反向对照 + 下拉列表 popdown 的层级断言）、**两个下拉框（GitHub 镜像 / 启动器更新）的候选都读的是 config**（⚠️ 别按 `combos[0]` 这种下标找，加一个下拉框就会全错位 —— 按 `textvariable` 定位）、**「保存并返回」真的存盘并回到主界面、被拦下时留在设置页**、**Java 路径能编辑 + 点「检测」真跑一次 java -version 并报出版本、填错路径当场拦下、换路径自动体检**、**兜底生效时那一栏显示实际在用的 Java、存过一次兜底就作废**、**「直接删除」开关存得住/回显得出**、**设置页里没有标签被裁掉**（默认 780 与最小 720 各量一遍：需要的宽度 > 分到的宽度 就是被切了尾巴）、**提示折行不会越算越窄**、**输入框 / 分割线都撑到右边**（默认 780 与最小 720 各量一遍，带反向对照：把下拉框缩回单列必须当场报出来）、**游戏退出自动关闭（开/关两路对照 + 备份先做完 + 下载中不关）**、干净退出 | 改了 `gui_*.py`、布局、对话框之后 |
+| `selfupdate_check.py` | **启动器自更新，74 项，不联网不建窗口**：版本比较必须「严格大于」才动（相等不下、更小绝不降级）；更新包的安全解析（路径穿越 / 越权改 `config.json`·`jre` / 格式不符 / 缺 sha → 整份丢掉）；解包后的逐文件 sha256 校验；**真跑一遍 `apply_update_main`**（替换顺序先 `_internal` 后 exe、失败真的回滚、**用户数据反向对照：`versions/` 一个字节没动**）；三档开关与硬停用条件；**从上一版发布包反推基线**（削掉 zip 内一级目录名、只收 exe 与 `_internal/`） | 改了 `launcher/selfupdate.py`、`MindustryLauncher.py` 的 `--apply-update` 分支、或 `make_release_zip.py` 的清单部分 |
 | `packed_code_check.py` | 解出 exe 内部 PYZ、递归收 `co_names`，断言新符号真进了打包产物 | **每次重打完 exe**（"能打开"证明不了包里是新代码） |
 | `release_check.py` | 解压发布包到空目录、预置最新版本清单、**用不相关的 cwd 真启动一次**，断言关键依赖齐全、cwd 没被污染、数据落在 exe 旁边 | **每次发发布包**（⚠️ 会真弹 GUI 窗口约 10 秒） |
 | `exe_edge_check.py` | **打包版的边界条件**：坏配置自愈 / 坏清单与非 UTF8 清单（有效版本照常列出）/ 孤儿对象宽限期 / 缺 jre 时的报错质量（**要把环境变量里的 java 摘干净再跑**，否则测到的是下一条）/ **脏 jvm 段与脏自定义参数** / **jre 路径写错时自动退回默认（配置也要改回去）** / **没 jre 但 JAVA_HOME 里有能用的 Java 时照常启动、且不写回配置**。全程在临时沙箱里跑，**不碰真实数据** | 打包部署之后；改动启动路径、配置加载、GC、日志之后 |
@@ -224,17 +248,18 @@ exe 是 PyInstaller 冻结过的另一份代码：数据根、cwd、日志文件
 
 ```bash
 python _tools/verify/code_regression.py      # 1. 改动后先跑回归（344 项）
-python _tools/verify/gui_smoke.py            # 2. 改了界面：真建窗口点一遍（107 项，不起游戏）
-python _tools/recycle.py dist/Mindustry启动器  # 3. ★ 打包前先清产物（见下方说明）
-python _tools/build.py --deploy              # 4. 构建并同步到运行时目录
-python _tools/verify/packed_code_check.py    # 5. 确认新代码真进了 exe
-python _tools/verify/exe_edge_check.py       # 6. 改了启动/配置/日志路径后：打包版边界冒烟
+python _tools/verify/gui_smoke.py            # 2. 改了界面：真建窗口点一遍（110 项，不起游戏）
+python _tools/verify/selfupdate_check.py     # 3. 改了自更新：离线跑检查/换文件/回滚（74 项）
+python _tools/recycle.py dist/Mindustry启动器  # 4. ★ 打包前先清产物（见下方说明）
+python _tools/build.py --deploy              # 5. 构建并同步到运行时目录
+python _tools/verify/packed_code_check.py    # 6. 确认新代码真进了 exe
+python _tools/verify/exe_edge_check.py       # 7. 改了启动/配置/日志路径后：打包版边界冒烟
 ```
 
-第 5 步别省 —— 源码改了没打进包时，exe 照常启动、界面照常出现、什么都不报错，
+第 6 步别省 —— 源码改了没打进包时，exe 照常启动、界面照常出现、什么都不报错，
 只是跑的是旧逻辑，光看"能打开"发现不了。
 
-第 3 步也别省 —— PyInstaller 建 COLLECT 时会先清空 `dist/Mindustry启动器`
+第 4 步也别省 —— PyInstaller 建 COLLECT 时会先清空 `dist/Mindustry启动器`
 （1000+ 个文件），这一步会被工具自带的「批量删除确认闸」拦下（单轮累计 ≥ 50
 个文件就要人工确认），**构建直接失败**。`recycle.py` 走 `SHFileOperationW`
 原生 API，既不受闸管、又真进回收站。
@@ -242,13 +267,17 @@ python _tools/verify/exe_edge_check.py       # 6. 改了启动/配置/日志路�
 ### 要交付的时候，看你交给谁
 
 ```bash
-# 给「想自己构建 / 看代码」的人 —— 120 KB 的源码包
+# 给「想自己构建 / 看代码」的人 —— 280 KB 的源码包
 python _tools/make_source_zip.py
 
-# 给「只想双击用」的人 —— 31 MB 的发布包，解压即用（自带 Java）
+# 给「只想双击用」的人 —— 31 MB 的发布包 + 精简更新包（自带 Java）
 python _tools/make_release_zip.py
 python _tools/verify/release_check.py       # ★ 发出去之前必须跑
 ```
+
+一次发版要传**两个资产**：完整包给新用户，`mindustry-launcher-v<版本>-update.zip`
+给已装旧版的用户自更新。后者只有一两 MB，所以每个完整包里都带一份
+`manifest.json`，就是下一版算差异的基线。
 
 `release_check.py` 是发布包唯一的验收手段：它会解压到**全新空目录**、
 用**完全无关的 cwd** 真启动一次（能弹窗 10 秒，别在忙时跑）。

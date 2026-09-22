@@ -85,6 +85,36 @@ def parse_bool(raw: Any, default: bool, *, what: str = "开关") -> bool:
     return default
 
 
+# ---- 启动器自更新的档位（同样放这里，理由见上面的 parse_bool）------------
+# 三档：auto = 自动检查+下载，退出时应用；check = 只提示；off = 完全停用。
+# ★ 定义在 utils 是因为 **config 和 selfupdate 都要用它**，而 selfupdate
+#   要 import config（读镜像、读档位）—— 解析逻辑留在 selfupdate 里就会
+#   绕成 config <-> selfupdate 的循环 import。
+LAUNCHER_UPDATE_MODES = ("auto", "check", "off")
+LAUNCHER_UPDATE_DEFAULT = "auto"
+
+
+def normalize_launcher_update(
+    raw: Any, *, default: str = LAUNCHER_UPDATE_DEFAULT,
+    what: str = "launcher_update",
+) -> str:
+    """把「启动器自更新」的档位清成三档之一。**不抛异常。**
+
+    认不出的一律退回默认 + WARNING（并**点名配置键**，用户得知道去
+    config.json 里改哪一行）。按兼容约定：以后要加档位只能往
+    ``LAUNCHER_UPDATE_MODES`` 里加，别改现有三个词的含义。
+    """
+    if isinstance(raw, str):
+        word = raw.strip().lower()
+        if word in LAUNCHER_UPDATE_MODES:
+            return word
+    logger.warning(
+        f"配置项 {what}={raw!r} 不是 {'/'.join(LAUNCHER_UPDATE_MODES)} 之一，"
+        f"按默认 {default} 处理"
+    )
+    return default
+
+
 def resolve_log_file(base_dir: Path) -> Path:
     """决定日志写到哪个文件。
 

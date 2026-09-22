@@ -46,7 +46,8 @@ launcher/               全部源码
     utils.py            路径、日志、原子写、回收站
     config.py           配置读写（存档分类 + jvm 启动配置 + 迁移链）
     storage.py          CAS 存储、备份、拼装运行时 jar
-    updates.py          更新检查与下载
+    updates.py          更新检查与下载（游戏本体）
+    selfupdate.py       ★ 启动器自身更新（查新版 → 下精简包 → 退出时换文件）
     gamecmd.py          启动参数解析 + 命令行拼装
     gamelog.py          游戏输出捕获（落盘 + 内存缓冲 + 管道编码兜底）
     gui_core.py         界面内核：线程队列、状态栏、窗口骨架
@@ -65,17 +66,18 @@ LICENSE                 GNU GPL-3.0 全文
 
 ```bash
 python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（344 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（107 项，不起游戏）
-python _tools/recycle.py dist/Mindustry启动器     # 3. ★ 打包前先清产物
-python _tools/build.py --deploy                  # 4. 构建 + 同步到部署目录
-python _tools/verify/packed_code_check.py        # 5. 确认新代码真进了 exe
-python _tools/verify/exe_edge_check.py           # 6. 改了启动/配置/日志路径后：打包版边界冒烟
+python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（110 项，不起游戏）
+python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（74 项）
+python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
+python _tools/build.py --deploy                  # 5. 构建 + 同步到部署目录
+python _tools/verify/packed_code_check.py        # 6. 确认新代码真进了 exe
+python _tools/verify/exe_edge_check.py           # 7. 改了启动/配置/日志路径后：打包版边界冒烟
 ```
 
-- **第 3 步不能省**：PyInstaller 建 COLLECT 前会先清空 `dist/Mindustry启动器`
+- **第 4 步不能省**：PyInstaller 建 COLLECT 前会先清空 `dist/Mindustry启动器`
   （1000+ 个文件），会撞上工具的「批量删除确认闸」（单轮累计 ≥ 50 个文件就要人工确认），
   构建**直接失败**。`recycle.py` 走 `SHFileOperationW` 原生 API，不受闸管、而且真进回收站。
-- **第 5 步不能省**：源码改了没打进包、或 spec 漏了模块时，exe 照常启动、界面照常出现、
+- **第 6 步不能省**：源码改了没打进包、或 spec 漏了模块时，exe 照常启动、界面照常出现、
   什么都不报错，只是跑的是旧逻辑 —— 光看「能打开」发现不了。
 - 部署是**增量**的：`_internal/` 有近千个文件，整目录重抄又慢又会撞删除闸，所以只复制
   真正不同的。`--deploy-to <目录>` 可指定目标，`--prune` 才会删掉目标里多出来的陈旧文件。
@@ -87,8 +89,27 @@ python _tools/verify/exe_edge_check.py           # 6. 改了启动/配置/日志
 |---|---|---|---|
 | **源码包** | `python _tools/make_source_zip.py` | ~280 KB | 想自己构建、看代码的人 |
 | **发布包** | `python _tools/make_release_zip.py` | ~31 MB | 只想双击用的人（不需要 Python / Java） |
+| **更新包** | 上一条命令顺带生成 | ~2 MB | **已装旧版的人** —— 启动器自更新时下它 |
 
-发布包 = exe + `_internal/` + 内置 `jre/` + `使用说明.txt` + `LICENSE`，解压即用。
+发布包 = exe + `_internal/` + 内置 `jre/` + `使用说明.txt` + `LICENSE` + 程序文件清单
+`manifest.json`，解压即用。
+
+发一次版是**两个资产**：完整包给新用户，更新包给老用户。更新包只装相对上一版
+**真正变动的文件**（exe 几乎每次都变；`_internal/` 只在改依赖 / Python / PyInstaller
+版本时才变），差异靠上一版随包发出的 `manifest.json` 算 —— 所以**每个完整包里都带
+一份**，同时本地留档在 `_history/releases/manifest-<版本>.json`。
+
+```bash
+# 常规发版：基线自动从留档里挑「版本号更小、且最大」的那份
+python _tools/make_release_zip.py
+
+# 上一版没带 manifest.json（1.0.0 就是，那时还没有自更新）→ 量它的发布包反推
+python _tools/make_release_zip.py --baseline-from-zip 上一版的发布包.zip --baseline-version 1.0.0
+
+python _tools/make_release_zip.py --no-update     # 只出完整包
+```
+
+⚠️ 拿不到基线时会**退化成全量更新包**（十几 MB）——大一点，但绝不会漏换文件。
 发出去之前跑一次验收：
 
 ```bash
@@ -112,6 +133,8 @@ python _tools/verify/release_check.py
   就被删掉。
 - **开关型的键只认 `true`/`false`**（数字 `0`/`1` 也认）：`bool("false")` 在 Python 里是
   `True`，写成字符串会把开关**反过来**。写成别的值一律退回默认 + 一条 WARNING。
+- **枚举型的键**（如 `launcher_update` = `auto`/`check`/`off`）写成认不出的值同样退回默认
+  + WARNING，并且 WARNING 里会**点名是哪个键** —— 用户要拿这句话去 `config.json` 里找。
 
 另外两个「不动本体就能扩展」的口子：
 
@@ -122,6 +145,25 @@ python _tools/verify/release_check.py
 
 ⚠️ 扩展里的代码跟启动器**同权限**运行，只放自己写的或信得过的文件。
 设 `MDT_NO_EXTENSIONS=1` 可整体停用。
+
+## 启动器自更新
+
+启动器会检查自己的新版本，并在退出时把程序文件换成新版。几个不走寻常路的决定：
+
+- **只换程序文件**：exe + `_internal/`。`jre/`、`config.json`、`versions/`、
+  `Backups/`、`logs/`、`extensions/` 一律不碰 —— 这是「向上兼容」的延伸：升级启动器
+  不该动到用户的任何数据。
+- **Windows 不允许覆盖运行中的 exe**，所以替换发生在**启动器退出之后**：退出前把 exe
+  复制到 `%TEMP%`，用它以 `--apply-update <计划文件>` 二次启动，等旧进程真的结束再从
+  外部替换。（刻意不用 `.cmd` 批处理：中文路径在批处理里的编码太容易翻车。）
+- **替换顺序先 `_internal/` 后 exe**：万一中途挂了，最坏是「旧 exe + 新运行时」，
+  比「新 exe + 旧运行时」好收拾。任何一步失败都回滚成原样，并记一笔到 `launcher.log`。
+- **严格大于才动作**：远程版本等于本地 → 什么都不做；小于本地 → 绝不降级
+  （开发机上自编的版本常常比 Release 新，这是最后一道闸）。
+- **更新包是网络来的**，所以只认 `_internal/` 前缀和 exe 自己，逐文件比对 sha256；
+  包不完整、格式不符、路径越界一律**整份丢掉** —— 半份更新计划比没有计划危险得多。
+- **三档开关**（设置页「启动器更新」）：`auto` = 后台下好、退出时换上；`check` = 只提示；
+  `off` = 停用。源码运行、以及 `MDT_NO_SELFUPDATE=1`，一律停用。
 
 ## 设计要点
 

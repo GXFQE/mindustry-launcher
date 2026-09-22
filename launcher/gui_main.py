@@ -29,7 +29,25 @@ SETTINGS_LABEL_TEXTS = (
     "额外游戏参数:",
     "日志保留份数:",
     "Java 路径(JRE/JDK):",
+    "启动器更新:",
 )
+
+# 「启动器自更新」档位 → 界面文案。键是 config.json 里存的英文值（那是稳定
+# 契约），值是给人看的说法。★ 这套映射**只加不改**：以后要加档位，就在
+# utils.LAUNCHER_UPDATE_MODES 和这里各加一项，别动 auto/check/off 的含义。
+LAUNCHER_UPDATE_LABELS = {
+    "auto": "自动（有新版就下载，退出时替换）",
+    "check": "只提示有新版本",
+    "off": "关闭",
+}
+LAUNCHER_UPDATE_VALUES = {v: k for k, v in LAUNCHER_UPDATE_LABELS.items()}
+
+
+def launcher_update_label(value: str) -> str:
+    """配置值 → 界面文案。认不出就按默认档显示，别让下拉框出现空行。"""
+    return LAUNCHER_UPDATE_LABELS.get(
+        value, LAUNCHER_UPDATE_LABELS["auto"]
+    )
 
 # ttk.Label 的自然宽度 = 字体实测宽度 + 这个内边距（Tk 8.6 实测正好 4）。
 # 算「这句提示需要多宽」时得把它加回去，不然每句都会「差 4 像素」而被误折行。
@@ -339,6 +357,34 @@ class MainMixin:
             glob, text="启动时自动检查更新", variable=self.auto_update_var
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=3)
         row = 3
+        # ---- 启动器自身的更新 ----
+        # 注意跟上面那个「启动时自动检查更新」不是一回事：那个管**游戏**版本
+        # （Anuken 的 jar），这个管**启动器自己**。默认 auto：后台下载，退出
+        # 启动器时由外部执行体替换（Windows 不允许覆盖运行中的 exe）。
+        # 只替换程序文件，**不碰** config.json / 备份 / 存档。
+        ttk.Label(glob, text="启动器更新:").grid(
+            row=row, column=0, sticky=tk.W, pady=3
+        )
+        self.launcher_update_var = tk.StringVar(
+            value=launcher_update_label(self.config.get("launcher_update"))
+        )
+        ttk.Combobox(
+            glob,
+            textvariable=self.launcher_update_var,
+            values=list(LAUNCHER_UPDATE_LABELS.values()),
+            state="readonly",
+            font=self.font,
+            width=28,
+        ).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=3)
+        row += 1
+        _auto_wrap_hint(ttk.Label(
+            glob,
+            text="只换启动器程序本身，不动游戏版本、配置、备份和存档；"
+                 "源码运行时自动停用",
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
+        row += 1
         # ---- Java（java.exe）路径 ----
         # 以前这一项只能改 config.json；现在放在界面上，改完能当场「检测」。
         # **JRE 和 JDK 都收** —— 判定只看目录里有没有 bin\java.exe，不看它
@@ -580,6 +626,9 @@ class MainMixin:
         )
         self.github_mirror_var.set(self.config.get("github_mirror"))
         self.auto_update_var.set(self.config.get("auto_update"))
+        self.launcher_update_var.set(
+            launcher_update_label(self.config.get("launcher_update"))
+        )
         self.extra_vm_var.set(self.config.get("extra_vm_args"))
         self.extra_prog_var.set(self.config.get("extra_program_args"))
         self.save_game_log_var.set(self.config.get("save_game_log"))
@@ -772,6 +821,15 @@ class MainMixin:
         )
         self.config.set("github_mirror", mirror)
         self.config.set("auto_update", self.auto_update_var.get())
+        # 下拉框里是给人看的文案，存回配置要换回英文档位值；万一认不出
+        # （理论上不会）就保持原值 —— 绝不写进去一个界面文案当档位。
+        self.config.set(
+            "launcher_update",
+            LAUNCHER_UPDATE_VALUES.get(
+                self.launcher_update_var.get(),
+                self.config.get("launcher_update"),
+            ),
+        )
         self.config.set("extra_vm_args", extra_vm_text.strip())
         self.config.set("extra_program_args", extra_prog_text.strip())
         self.config.set("save_game_log", self.save_game_log_var.get())
@@ -830,6 +888,11 @@ class MainMixin:
             )
             self.auto_update_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["auto_update"]
+            )
+            self.launcher_update_var.set(
+                launcher_update_label(
+                    ConfigManager.GLOBAL_DEFAULTS["launcher_update"]
+                )
             )
             self.extra_vm_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["extra_vm_args"]

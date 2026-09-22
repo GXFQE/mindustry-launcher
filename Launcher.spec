@@ -92,7 +92,7 @@ binaries = [(_p, ".") for _p in
             (os.path.join(_CONDA_LIB, d) for d in _REQUIRED_DLLS)]
 
 a = Analysis(
-    ["Launcher_Test_123.py"],
+    ["MindustryLauncher.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,

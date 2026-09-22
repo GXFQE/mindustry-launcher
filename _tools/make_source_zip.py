@@ -32,7 +32,7 @@ DEFAULT_NAME = "Mindustry启动器_源码包_{date}.zip"
 ITEMS = [
     "README.md",              # 说明怎么构建
     "LICENSE",                # 许可协议（GPL-3.0 全文）
-    "Launcher_Test_123.py",   # 入口
+    "MindustryLauncher.py",   # 入口
     "Launcher.spec",          # 打包配置
     "mindustry.ico",          # 构建资源（spec 的 datas + icon 引用）
     "launcher",               # 全部源码

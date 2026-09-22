@@ -26,7 +26,7 @@ tkinter 界面，**只用 Python 标准库，没有任何第三方依赖**。
 | PyInstaller | 仅构建 exe 需要：`python -m pip install pyinstaller` |
 
 ```bash
-python Launcher_Test_123.py
+python MindustryLauncher.py
 ```
 
 ⚠️ tkinter 是硬要求 —— 构建时要从解释器推导 tcl/tk 运行库的位置。如果
@@ -36,7 +36,7 @@ Windows 官方安装包默认也带）。
 ## 项目结构
 
 ```
-Launcher_Test_123.py    入口（约 20 行 wrapper，真正的代码在 launcher/）
+MindustryLauncher.py    入口（约 20 行 wrapper，真正的代码在 launcher/）
 Launcher.spec           PyInstaller 打包配置
 mindustry.ico           窗口图标
 launcher/               全部源码

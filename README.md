@@ -67,7 +67,7 @@ LICENSE                 GNU GPL-3.0 全文
 ```bash
 python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（344 项）
 python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（110 项，不起游戏）
-python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（74 项）
+python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
 python _tools/build.py --deploy                  # 5. 构建 + 同步到部署目录
 python _tools/verify/packed_code_check.py        # 6. 确认新代码真进了 exe
@@ -164,6 +164,9 @@ python _tools/verify/release_check.py
   包不完整、格式不符、路径越界一律**整份丢掉** —— 半份更新计划比没有计划危险得多。
 - **三档开关**（设置页「启动器更新」）：`auto` = 后台下好、退出时换上；`check` = 只提示；
   `off` = 停用。源码运行、以及 `MDT_NO_SELFUPDATE=1`，一律停用。
+- **查新版的地址可以覆盖**：环境变量 `MDT_SELFUPDATE_API`（只认 `http(s)://`）。两个用处：
+  ① 端到端验证时指向一个本地假接口，把「查新版 → 下载 → 换文件 → 重启」整条链真跑一遍；
+  ② `api.github.com` 连不上时指向自己的代理。下载地址由接口返回内容决定，所以它也能一起改。
 
 ## 设计要点
 

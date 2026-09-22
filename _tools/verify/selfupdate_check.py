@@ -20,6 +20,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -401,6 +402,77 @@ def test_release_baseline() -> None:
         check("不是发布包时必须报错", True)
 
 
+def test_api_override() -> None:
+    """查新版的地址可被 ``MDT_SELFUPDATE_API`` 盖掉（端到端验证要用它指假接口）。"""
+    print("--- 查新版地址可覆盖 ---")
+    os.environ.pop(su.API_ENV, None)
+    check("没设环境变量时用官方地址", su.update_api() == su.SELF_UPDATE_API)
+    os.environ[su.API_ENV] = "http://127.0.0.1:9/latest.json"
+    check("设了就认它", su.update_api() == "http://127.0.0.1:9/latest.json")
+    os.environ[su.API_ENV] = "https://proxy.example/latest"
+    check("https 也认", su.update_api() == "https://proxy.example/latest")
+    os.environ[su.API_ENV] = "D:/some/file.json"
+    check("非 http(s) 当没设（笔误不该让检查静默失效）",
+          su.update_api() == su.SELF_UPDATE_API)
+    os.environ[su.API_ENV] = "   "
+    check("空白当没设", su.update_api() == su.SELF_UPDATE_API)
+    os.environ.pop(su.API_ENV, None)
+
+
+def test_updater_runtime() -> None:
+    """执行体的运行时必须就位。
+
+    ★ 这条是**真机端到端验证抓回来的**：onedir 打包的 exe 单独拎出来跑不起来 ——
+      它得靠同目录的 ``_internal/``。当时 ``launch_updater`` 只复制了 exe，
+      结果链路每一环都在报「已启动」，执行体却什么都没干（写不出日志、也不报错），
+      因为它加载运行时那一步就静悄悄死了。进程内验证原来没覆盖到它。
+    """
+    print("--- 执行体要有自己的运行时 ---")
+    app = _fresh_app("app_runtime")
+    upd = _TMP / "updater_home"
+    upd.mkdir(parents=True, exist_ok=True)
+
+    check("app 目录里没有 _internal 时如实返回 False",
+          su.updater_runtime_link(upd, _TMP / "根本没有这个目录") is False)
+    check("接上之后返回 True", su.updater_runtime_link(upd, app) is True)
+    link = upd / su.INTERNAL_DIR_NAME
+    check("执行体旁边真的出现了 _internal",
+          link.is_dir() and (link / "a.dll").is_file())
+    check("指向的是程序目录那份（不是拷贝）",
+          os.path.realpath(link) == os.path.realpath(app / su.INTERNAL_DIR_NAME))
+    check("重复调用是幂等的", su.updater_runtime_link(upd, app) is True)
+    check("只动 %TEMP% 那边，不在程序目录留东西",
+          {p.name for p in app.iterdir()}
+          == {su.INTERNAL_DIR_NAME, "config.json", "versions", EXE})
+
+    old = upd / "stale_copy.exe"
+    old.write_bytes(b"x")
+    os.utime(old, (time.time() - 48 * 3600,) * 2)
+    su.cleanup_updater_dir(hours=1, root=upd)
+    check("过期的执行体副本会被清掉", not old.exists())
+    check("目标还在时联接留着（省一次重建）", link.is_dir())
+
+    # ★ 真机验证抓回来的第二条：程序目录**搬走/换地方**之后，%TEMP% 里那份联接
+    #   就成了断链，而断链的联接 os.path.islink 给的是假、is_dir 也是假 ——
+    #   当时它既没被摘掉、又挡住了新建，于是执行体再也起不来（更新静默失败）。
+    #   症状是「第一次能更新，之后每次都不行」，很容易被当成偶发。
+    gone = _fresh_app("app_moved_away")
+    check("先接一次（模拟正常跑过一次）",
+          su.updater_runtime_link(upd, gone) is True)
+    shutil.rmtree(gone)                  # 用户把程序目录搬走了 / 删了
+    # 判「链还在不在」不能拿两个 realpath 比 —— 目标没了以后 realpath 不查存在，
+    # 两边会归一化成同一串、恒等。要看的是**透过链读得到东西吗**。
+    check("程序目录搬走后联接成了断链（不是「目标还在」）",
+          not Path(link).resolve().is_dir() and not (link / "a.dll").exists())
+    again = _fresh_app("app_moved_away")
+    check("程序目录换了地方后仍能重新接上（断链要被摘掉）",
+          su.updater_runtime_link(upd, again) is True)
+    check("重新接上后指向新目录",
+          os.path.realpath(link) == os.path.realpath(again / su.INTERNAL_DIR_NAME))
+    check("摘联接/重建都没动过被指向的那个目录",
+          (again / su.INTERNAL_DIR_NAME / "a.dll").read_bytes() == b"OLD-DLL")
+
+
 def main() -> int:
     print(f"项目根：{ROOT}")
     print(f"临时目录：{_TMP}")
@@ -416,6 +488,10 @@ def main() -> int:
     test_mode()
     print()
     test_release_baseline()
+    print()
+    test_api_override()
+    print()
+    test_updater_runtime()
     print()
 
     bad = [name for ok, name, _ in _results if not ok]

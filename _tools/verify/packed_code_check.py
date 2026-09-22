@@ -202,6 +202,21 @@ REQUIRED = {
         # 「入口必须叫 register」由 code_regression 那条「扩展能载入」的用例
         # 功能性地钉住：改了名字那条就红。
     ],
+    # 2026-09-22 新增：启动器自身更新。不在包里 = exe 还是个「不会更新自己」的
+    # 版本，而且这种缺失光看窗口能不能打开是发现不了的。
+    "launcher.selfupdate": [
+        "UpdatePlan", "parse_version", "is_newer", "parse_manifest",
+        "fetch_latest_update", "download_update", "stage_update",
+        "launch_updater", "apply_update_main", "check_and_stage",
+        "state_path", "read_state", "clear_state", "mode_of",
+        "staged_root", "staged_files_dir", "staged_plan_path", "write_plan",
+        "cleanup_updater_dir",
+        # 「查新版」的地址可被环境变量盖掉（端到端验证 / 走代理）
+        "update_api", "API_ENV",
+        # 只放行 exe 自己与 _internal/ —— 「绝不碰用户数据」就落在这两个名字上
+        "_is_replaceable", "_safe_rel", "PROTECTED_NAMES",
+        "UPDATE_ASSET_SUFFIX", "DISABLE_ENV", "MODE_AUTO",
+    ],
 }
 
 

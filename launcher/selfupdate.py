@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -63,7 +64,8 @@ logger = logging.getLogger(__name__)
 # ---- 常量 ---------------------------------------------------------------
 
 # 从哪儿查「启动器有没有新版」。写死是故意的：这个地址不属于用户配置的
-# 「游戏版本来源」，改它等于换了一个发布方。要换仓库改这一行。
+# 「游戏版本来源」，改它等于换了一个发布方。要换仓库改这一行
+# （临时换地址用环境变量 MDT_SELFUPDATE_API，见下面 API_ENV）。
 SELF_UPDATE_API = (
     "https://api.github.com/repos/GXFQE/mindustry-launcher/releases/latest"
 )
@@ -92,8 +94,19 @@ BACKUP_SUFFIX = ".mdt-old"
 # 执行体自己那个 exe 副本放哪（%TEMP% 下；用完删不掉，留着等下次清理）。
 UPDATER_DIR_NAME = "mdt_updater"
 
+# Windows：判断「这是个 reparse point（目录联接 / 符号链接）」用的位。
+# 用它而不是 os.path.islink —— 后者对**断掉的**目录联接不给真值（见 _drop_runtime_link）。
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
 # 环境变量：设成真值就完全停用自更新（开发机上很需要）。
 DISABLE_ENV = "MDT_NO_SELFUPDATE"
+
+# 环境变量：把「查新版」的地址换掉。两个用处 ——
+#   ① 验证自更新时指向一个本地假接口（造个假版本，把替换流程真跑一遍）；
+#   ② api.github.com 连不上时指向自己的代理。
+# 只认 http/https；别的值当没设。下载地址（资产 URL）仍由接口返回的内容决定，
+# 所以想连下载一起改，接口里返回本地 URL 即可。
+API_ENV = "MDT_SELFUPDATE_API"
 
 # 三种档位（存在 config.json 的 ``launcher_update``）：
 #   auto  —— 后台自动检查 + 下载，退出启动器时自动应用（默认）
@@ -106,7 +119,8 @@ MODE_AUTO, MODE_CHECK, MODE_OFF = LAUNCHER_UPDATE_MODES
 # 允许被替换的路径（防止一个被篡改/写坏的更新包往任意位置写文件）。
 # 除了 ``_internal/`` 前缀，还允许「当前正在运行的 exe 名」—— 用名字比
 # 硬编码更稳（用户真把 exe 改过名也照样能更新）。
-INTERNAL_PREFIX = "_internal/"
+INTERNAL_DIR_NAME = "_internal"
+INTERNAL_PREFIX = INTERNAL_DIR_NAME + "/"
 
 # 这些文件在程序目录里属于「用户的东西」，任何情况下都不许被更新覆盖。
 # 白名单是上面那条前缀判断，这里再列一次是为了留个显式记录。
@@ -275,15 +289,29 @@ def _pick_update_asset(release: dict) -> dict | None:
     return None
 
 
+def update_api() -> str:
+    """「查最新版」用哪个地址。
+
+    默认是写死的官方接口；``MDT_SELFUPDATE_API`` 可以盖掉它（见上面 ``API_ENV``
+    那段注释）。**只认 http/https** —— 否则填个笔误（比如把路径贴进来）会让
+    整个检查静默失效，不如直接当没设、走默认。
+    """
+    raw = (os.environ.get(API_ENV) or "").strip()
+    if raw.lower().startswith(("http://", "https://")):
+        return raw
+    return SELF_UPDATE_API
+
+
 def fetch_latest_update(timeout: int = 6) -> dict | None:
     """查一次最新 Release。返回 None = 没查到 / 网络不通 / 没有更新包。
 
     只查 ``/releases/latest``（GitHub 会跳过草稿和预发布），比拉整个
     releases 列表再挑要省流量也省时间。
     """
+    api = update_api()
     try:
         req = urllib.request.Request(
-            SELF_UPDATE_API,
+            api,
             headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
         )
         # 超时给短一点：这个请求在后台跑，卡住的每一秒都是白等
@@ -457,6 +485,79 @@ def _wait_for_exit(pid: int, timeout: float = 90.0) -> bool:
     return False
 
 
+def _drop_runtime_link(link: Path) -> None:
+    """摘掉执行体旁边那个 ``_internal``（程序目录搬走后的断链也要能摘）。
+
+    ⚠️ **别用 ``os.path.islink`` 判**：Windows 的**目录联接**（junction）在它眼里
+      未必算符号链接，而**断掉的**联接更麻烦 —— 目标没了之后 ``islink`` 假、
+      ``is_dir`` 也假，结果就是「摘不掉」：后面 mklink 与复制全都撞
+      「文件已存在」，执行体起不来、更新静默失败。真机验证第二次跑就踩到了
+      （第一次跑留下的联接指向的是已被删掉的沙箱）。
+      按 **reparse point 属性**判才稳 —— 联接哪怕断了，属性也还在。
+    """
+    try:
+        st = os.lstat(link)
+    except OSError:
+        return
+    reparse = (getattr(st, "st_reparse_tag", 0)
+               or (getattr(st, "st_file_attributes", 0) & _REPARSE_POINT))
+    if reparse:
+        # 联接/符号链接：摘掉它本身（``rmdir`` 对目录联接有效，且不碰目标）。
+        # 断链的联接也走这里 —— 这正是上面那段注释说的事。
+        for remove in (os.rmdir, os.unlink):
+            try:
+                remove(link)
+                return
+            except OSError:
+                continue
+    elif os.path.isdir(link):
+        shutil.rmtree(link, ignore_errors=True)
+
+
+def updater_runtime_link(updater_dir: Path, app_dir: Path) -> bool:
+    """给 %TEMP% 里那份执行体接上它自己的 ``_internal/``。
+
+    ★ 这一步**不能省**：这是 onedir 打包的产物，exe 单独拎出来是跑不起来的 ——
+      它要靠**同目录**的 ``_internal/`` 里那份 Python 运行时和一堆 DLL。第一次
+      真机验证时就是漏了这一步，链路上每一环都在报「已启动」，执行体却什么都没干
+      （写不出日志、也不报错），因为它在加载运行时那一步就静悄悄死了。
+
+    做法是用**目录联接**指回程序目录那份：瞬间完成、不占空间，而且替换
+    ``_internal/`` 里的文件时两边看到的是同一份。极少数建不了联接的地方
+    （跨卷、FAT32 之类）才退化成真拷一份。
+
+    ⚠️ 上一次留下的联接**必须核对目标**：用户把程序目录改名/搬走之后，那份联接
+      就指向一个不存在的目录了 —— 留着它执行体一样起不来。
+    """
+    src = Path(app_dir) / INTERNAL_DIR_NAME
+    if not src.is_dir():
+        return False
+    link = Path(updater_dir) / INTERNAL_DIR_NAME
+    try:
+        if link.exists() and os.path.realpath(link) == os.path.realpath(src):
+            return True                  # 已经指对了（上次留下的），直接用
+    except OSError:
+        pass
+    _drop_runtime_link(link)
+
+    if os.name == "nt":
+        # 用 mklink 建联接：不需要管理员权限（符号链接才需要），
+        # 而且比手搓 reparse point 省事得多。输出是 GBK，别当文本解。
+        r = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(src)],
+            capture_output=True, shell=False,
+        )
+        if r.returncode == 0 and link.is_dir():
+            return True
+    logger.warning("建不了目录联接，改为拷一份运行时（会慢几秒）")
+    try:
+        shutil.copytree(src, link)
+        return True
+    except OSError as e:
+        logger.error(f"执行体的运行时没法就位: {e}")
+        return False
+
+
 def launch_updater(plan_path: Path, app_dir: Path) -> bool:
     """把当前 exe 复制到 %TEMP% 再以 ``--apply-update`` 启动它。
 
@@ -465,12 +566,19 @@ def launch_updater(plan_path: Path, app_dir: Path) -> bool:
       「双击没反应」或「路径变成乱码」）。用自己这个 exe 当执行体，
       路径全程走 Python 的宽字符 API，没有编码问题，而且替换逻辑
       跟主程序共用一份代码、能被回归测到。
+
+    ★ 为什么不能直接再起一次**程序目录里那个** exe（省掉这份拷贝）：
+      替换到最后要动 exe 自己，而**正在运行的那个映像文件是锁着的** ——
+      由它自己来换自己必然撞 WinError 32。所以必须另起一份。
     """
     try:
         updater_dir = Path(tempfile.gettempdir()) / UPDATER_DIR_NAME
         updater_dir.mkdir(parents=True, exist_ok=True)
         updater_exe = updater_dir / Path(sys.executable).name
         shutil.copy2(sys.executable, updater_exe)
+        # ★ onedir 的 exe 离不开同目录的 _internal/，得先给它接上
+        if not updater_runtime_link(updater_dir, app_dir):
+            return False
         flags = 0
         if os.name == "nt":
             # 脱离父进程：父进程随后就退出了，不能让它连带把执行体带走
@@ -758,15 +866,31 @@ def check_and_stage(
             "plan_path": str(plan_path)}
 
 
-def cleanup_updater_dir(hours: float = 24.0) -> None:
-    """清掉 %TEMP% 里过期的执行体副本（它自己删不掉自己）。"""
-    root = Path(tempfile.gettempdir()) / UPDATER_DIR_NAME
+def cleanup_updater_dir(hours: float = 24.0, root: Path | None = None) -> None:
+    """清掉 %TEMP% 里过期的执行体副本（它自己删不掉自己）。
+
+    ⚠️ 只清**过期的**（默认 24 小时前）：刚起来的那个执行体可能正在换文件，
+      这时动它的 exe 或 ``_internal`` 联接只会帮倒忙。
+
+    ``root`` 只是给验证脚本指个别处的目录用的，正常调用不用传。
+    """
+    root = Path(root) if root is not None \
+        else Path(tempfile.gettempdir()) / UPDATER_DIR_NAME
     if not root.is_dir():
         return
     cutoff = time.time() - hours * 3600
     for f in root.iterdir():
         try:
-            if f.is_file() and f.stat().st_mtime < cutoff:
-                f.unlink()
+            st = os.lstat(f)             # 用 lstat：断链的联接 stat 会直接报错
+            if st.st_mtime >= cutoff:
+                continue                 # 还不算旧，别动（可能正在用）
+            if getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+                # 那个 _internal 联接：目标还在就留着（省一次重建），
+                # 程序目录被搬走/删掉成了断链才摘。
+                if not Path(f).resolve().is_dir():
+                    _drop_runtime_link(f)
+                continue
+            if not stat.S_ISDIR(st.st_mode):
+                os.unlink(f)
         except OSError:
             pass

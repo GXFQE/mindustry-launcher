@@ -15,6 +15,7 @@ from .config import (
     roaming_dir,
     sanitize_profile_name,
 )
+from .i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,10 @@ class ProfilesMixin:
         self.profile_path_var.set(
             f"📁 {self.config.get_current_save_path()}"
         )
-        self.root.title(f"Mindustry 启动器 - 存档「{current}」")
+        # ★ 标题也得走 t()：换语言时 rebuild_for_language() 会调到这里，标题
+        #   顺手就跟着变了。硬写中文的话，界面切成英文之后标题栏会一直是中文
+        #   （标题不在那两页里，重建时没人管它）。
+        self.root.title(t("app.title_profile", name=current))
 
     def _on_profile_selected(self, event: object = None) -> None:
         name = self.profile_var.get()

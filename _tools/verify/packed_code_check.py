@@ -71,6 +71,9 @@ REQUIRED = {
         # _start_background_gc**（那个方法的行为被回归逐条断言着）
         "ExtensionRegistry", "extensions", "_load_extensions_once",
         "_start_post_window_tasks",
+        # 2026-10-05：界面语言。两页的文案在建控件那一刻就取好了，换语言只能
+        # 整体重建 —— 所以 _build_pages 必须和 rebuild_for_language 一起在包里。
+        "t", "apply_setting", "_build_pages", "rebuild_for_language",
     ],
     # 2026-09-18 新增两个模块。不在包里 = exe 还是旧逻辑（读 Mindustry.json、
     # 把游戏输出扔掉），而这种退化只看「能打开」是发现不了的。
@@ -124,6 +127,10 @@ REQUIRED = {
         # 2026-09-22：开关值解析只有这一处实现（config.normalize_bool 是它的
         # 薄委托）—— sources.py 也要用，而它不能 import config（会绕成环）
         "parse_bool", "TRUE_WORDS", "FALSE_WORDS",
+        # 2026-10-05：语言 code 的识别同样放在这里（i18n 要用，但 i18n 不能
+        # 反向 import config，否则又是一个环）
+        "normalize_language", "LANGUAGE_AUTO", "LANGUAGE_CODES",
+        "LANGUAGE_DEFAULT", "LANGUAGES",
     ],
     "launcher.config": [
         # 版本号会拼进清单文件名，必须和分类名一样过校验
@@ -148,6 +155,9 @@ REQUIRED = {
         "KNOWN_TOP_KEYS", "OBSOLETE_TOP_KEYS", "_coerce_global",
         "_coerce_profile", "_extras", "CONFIG_VERSION_KEY",
         "MIGRATIONS", "_migrate", "_migrate_0_to_1",
+        # 2026-10-05：新增带默认值的键（language）**不涨 config_version** ——
+        # 老配置读进来就是 auto，靠的是「规格表里多一行」而不是一次迁移。
+        "normalize_language", "LANGUAGE_AUTO",
     ],
     "launcher.gui_versions": ["_gc_task", "sanitize_version_name"],
     "launcher.gui_dialog": ["_is_link_like", "_ignore_links"],
@@ -158,7 +168,15 @@ REQUIRED = {
         "open_log_window",
         # 镜像地址 + 日志保留份数；两帧共用一个标签列宽（输入框才对得齐）
         "github_mirror_var", "max_log_files_var", "normalize_mirror",
-        "_label_col_width", "SETTINGS_LABEL_TEXTS",
+        "_label_col_width",
+        # 2026-10-05：界面文案接进语言包。原来写死的两个模块级常量
+        # （SETTINGS_LABEL_TEXTS / LAUNCHER_UPDATE_LABELS）已删，改成函数 ——
+        # 常量是 import 时求值的，换语言它不会变。
+        "_settings_label_texts", "launcher_update_labels",
+        "launcher_update_values", "launcher_update_label",
+        "language_labels", "language_values", "_language_label_in_form",
+        "_selected_language", "language_var",
+        "apply_setting", "current_language", "t", "rebuild_for_language",
         # 2026-09-18 追加：保存和返回合成一个按钮（离开设置页＝保存）
         "save_and_return", "close_on_game_exit_var",
         # 2026-09-19 追加：JRE 路径在设置页里可改 + 「检测」跑 java -version
@@ -172,6 +190,16 @@ REQUIRED = {
         # 2026-09-19 追加：设置页的灰字提示放不下就折行（以前长提示会被
         # grid 直接裁掉一截，用户截过图）
         "_auto_wrap_hint", "_HINT_PAD",
+    ],
+    # 2026-10-05 新增：i18n 地基。不在包里 = exe 还是「文案写死在代码里」的
+    # 旧逻辑（界面上根本换不了语言，而且这种退化只看窗口能不能打开发现不了）。
+    "launcher.i18n": [
+        "LANG_SUBDIR", "LANG_ENV",
+        "set_language", "current_language", "language_is_forced", "t",
+        "apply_setting", "_load_pack", "resource_path",
+        # 语言解析：系统界面语言优先，认不出退默认
+        "LANGUAGE_DEFAULT", "LANGUAGE_CODES", "normalize_language",
+        "_system_language", "_system_primary_language", "_bootstrap",
     ],
     "launcher.gui": ["LogMixin"],
     "launcher.updates": [

@@ -18,7 +18,9 @@ from typing import Any
 from . import sources as _sources
 from .utils import (
     LAUNCHER_UPDATE_DEFAULT,
+    LANGUAGE_AUTO,
     atomic_write_json,
+    normalize_language,
     normalize_launcher_update,
     parse_bool,
 )
@@ -379,6 +381,11 @@ class ConfigManager:
         #   另外「源码运行一律不检查」是硬编码的（见 selfupdate.mode_of），
         #   所以在开发机上再怎么配也不会把自己编的版本顶掉。
         "launcher_update": LAUNCHER_UPDATE_DEFAULT,
+        # ★ 界面语言：auto = 跟随系统，也可写 zh_CN / en_US（值域见
+        #   utils.LANGUAGES）。认不出的值退 **auto** 而不是硬退中文 ——
+        #   用户写的可能是一门我们还没做的语言，跟随系统至少不会把他
+        #   锁死在中文界面里。语言包是 lang/<code>.json（见 launcher/i18n.py）。
+        "language": LANGUAGE_AUTO,
         # 自定义启动参数。存字符串（而不是数组）是为了让用户在设置页里
         # 改起来就像改一行命令行；解析见 gamecmd.split_args。
         "extra_vm_args": "",
@@ -445,6 +452,9 @@ class ConfigManager:
         # 三档枚举（auto/check/off）。解析函数在 utils 而不是 selfupdate ——
         # 那边要 import 本模块，写那边会绕成循环 import。
         "launcher_update": normalize_launcher_update,
+        # 界面语言（auto / zh_CN / en_US）。解析函数同样放 utils —— 理由同上，
+        # 而且 i18n 要用它取值、i18n 只能依赖 utils。
+        "language": normalize_language,
     }
     # 字符串型配置项的额外约束：必须真的是字符串（别的类型写了就退默认，
     # 免得 ``str(["a"])`` 变成 "['a']" 这种用户看了莫名其妙的玩意儿）。

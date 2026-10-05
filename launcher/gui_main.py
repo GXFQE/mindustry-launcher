@@ -12,42 +12,73 @@ from .config import (
     normalize_mirror,
 )
 from .gamecmd import check_extra_args, probe_java, split_args
+from .i18n import apply_setting, current_language, t
+from .utils import LANGUAGE_AUTO, LANGUAGE_CODES, LANGUAGES
 
 logger = logging.getLogger(__name__)
 
-# 设置页两组设置各在自己的 LabelFrame 里 grid，列宽默认按**各自**最长的标签
-# 算 —— 于是「最小备份时间(分钟):」把存档那组的输入框推得比启动器那组更靠右，
-# 看着就是「输入框没对齐」。把两组所有左侧标签放一起量一次，给两帧的
-# column 0 设同一个 minsize，输入框左边缘才齐（见 _label_col_width）。
-SETTINGS_LABEL_TEXTS = (
-    "分类名称:",
-    "数据目录:",
-    "最小备份时间(分钟):",
-    "最大备份数量:",
-    "GitHub 镜像:",
-    "额外 JVM 参数:",
-    "额外游戏参数:",
-    "日志保留份数:",
-    "Java 路径(JRE/JDK):",
-    "启动器更新:",
-)
 
-# 「启动器自更新」档位 → 界面文案。键是 config.json 里存的英文值（那是稳定
-# 契约），值是给人看的说法。★ 这套映射**只加不改**：以后要加档位，就在
-# utils.LAUNCHER_UPDATE_MODES 和这里各加一项，别动 auto/check/off 的含义。
-LAUNCHER_UPDATE_LABELS = {
-    "auto": "自动（有新版就下载，退出时替换）",
-    "check": "只提示有新版本",
-    "off": "关闭",
-}
-LAUNCHER_UPDATE_VALUES = {v: k for k, v in LAUNCHER_UPDATE_LABELS.items()}
+def _settings_label_texts() -> tuple[str, ...]:
+    """设置页两帧左侧标签（用来把两帧的标签列量成同一宽度）。
+
+    ★ 必须是**函数**而不是模块级常量：文案要跟着界面语言走，而模块级常量是
+      import 那一刻求值的 —— 换语言它不会变。凡是文案，一律放进函数体。
+    """
+    return (
+        t("settings.label.profile_name"),
+        t("settings.label.data_dir"),
+        t("settings.label.min_playtime"),
+        t("settings.label.max_backups"),
+        t("settings.label.mirror"),
+        t("settings.label.extra_vm"),
+        t("settings.label.extra_prog"),
+        t("settings.label.max_logs"),
+        t("settings.label.jre_path"),
+        t("settings.label.launcher_update"),
+        t("settings.label.language"),
+    )
+
+
+def launcher_update_labels() -> dict[str, str]:
+    """「启动器自更新」档位 → 界面文案。键是 config.json 里存的英文值（那是
+    稳定契约），值是给人看的说法。
+
+    ★ 映射**只加不改**：以后要加档位，就在 utils.LAUNCHER_UPDATE_MODES 和
+      语言包里各加一项，别动 auto/check/off 的含义。
+    ★ 同样是函数：文案要跟着语言走。
+    """
+    return {
+        "auto": t("launcher_update.auto"),
+        "check": t("launcher_update.check"),
+        "off": t("launcher_update.off"),
+    }
+
+
+def launcher_update_values() -> dict[str, str]:
+    """界面文案 → 配置值（下拉框选完要换回契约值）。"""
+    return {v: k for k, v in launcher_update_labels().items()}
 
 
 def launcher_update_label(value: str) -> str:
     """配置值 → 界面文案。认不出就按默认档显示，别让下拉框出现空行。"""
-    return LAUNCHER_UPDATE_LABELS.get(
-        value, LAUNCHER_UPDATE_LABELS["auto"]
-    )
+    labels = launcher_update_labels()
+    return labels.get(value, labels["auto"])
+
+
+def language_labels() -> dict[str, str]:
+    """语言配置值 → 下拉框文案。
+
+    ``auto`` 用「跟随系统」这样的说法；具体语言一律用**它自己的名字**
+    （见 utils.LANGUAGES 的注释）—— 界面语言认错时，用户至少认得出自己那行。
+    """
+    out = {LANGUAGE_AUTO: t("language.auto")}
+    out.update({code: name for code, name in LANGUAGES})
+    return out
+
+
+def language_values() -> dict[str, str]:
+    """下拉框文案 → 配置值。"""
+    return {v: k for k, v in language_labels().items()}
 
 # ttk.Label 的自然宽度 = 字体实测宽度 + 这个内边距（Tk 8.6 实测正好 4）。
 # 算「这句提示需要多宽」时得把它加回去，不然每句都会「差 4 像素」而被误折行。
@@ -92,20 +123,24 @@ def _auto_wrap_hint(label: ttk.Label) -> ttk.Label:
 
 
 class MainMixin:
+    # 本次「保存并返回」是否换了界面语言 ⇒ 决定要不要把两页重建
+    # （见 save_settings / save_and_return）。默认 False。
+    _language_changed = False
+
     def _build_main_ui(self) -> None:
         ttk.Label(
             self.main_frame,
-            text="🎮 Mindustry 启动器",
+            text=t("main.title"),
             font=("Microsoft YaHei", 14, "bold"),
         ).pack(pady=(0, 12))
         profile_frame = ttk.LabelFrame(
-            self.main_frame, text="存档分类（切换后启动的游戏数据完全隔离）",
+            self.main_frame, text=t("main.profile_frame"),
             padding="10",
         )
         profile_frame.pack(fill=tk.X, pady=(0, 10))
         profile_row = ttk.Frame(profile_frame)
         profile_row.pack(fill=tk.X)
-        ttk.Label(profile_row, text="当前存档:").pack(side=tk.LEFT)
+        ttk.Label(profile_row, text=t("main.current_profile")).pack(side=tk.LEFT)
         self.profile_var = tk.StringVar(
             value=self.config.get_current_profile()
         )
@@ -122,10 +157,10 @@ class MainMixin:
             "<<ComboboxSelected>>", self._on_profile_selected
         )
         ttk.Button(
-            profile_row, text="管理存档", command=self.manage_profiles
+            profile_row, text=t("main.manage_profiles"), command=self.manage_profiles
         ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            profile_row, text="打开目录", command=self.open_current_save_dir
+            profile_row, text=t("main.open_dir"), command=self.open_current_save_dir
         ).pack(side=tk.LEFT, padx=(0, 5))
         self.profile_path_var = tk.StringVar()
         ttk.Label(
@@ -136,7 +171,7 @@ class MainMixin:
             anchor=tk.W,
         ).pack(fill=tk.X, pady=(6, 0))
         version_frame = ttk.LabelFrame(
-            self.main_frame, text="选择游戏版本", padding="10"
+            self.main_frame, text=t("main.version_frame"), padding="10"
         )
         version_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         list_cont = ttk.Frame(version_frame)
@@ -152,32 +187,32 @@ class MainMixin:
         btn_frame.pack(fill=tk.X, pady=10)
         self.launch_btn = ttk.Button(
             btn_frame,
-            text="启动游戏",
+            text=t("main.launch"),
             command=self.launch_game,
             state=tk.DISABLED,
         )
         self.launch_btn.pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            btn_frame, text="刷新版本", command=self.refresh_versions
+            btn_frame, text=t("main.refresh"), command=self.refresh_versions
         ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            btn_frame, text="管理版本", command=self.manage_versions
+            btn_frame, text=t("main.manage_versions"), command=self.manage_versions
         ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            btn_frame, text="管理备份", command=self.manage_backups
+            btn_frame, text=t("main.manage_backups"), command=self.manage_backups
         ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            btn_frame, text="检查更新", command=self.check_updates
+            btn_frame, text=t("main.check_updates"), command=self.check_updates
         ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            btn_frame, text="运行日志", command=self.open_log_window
+            btn_frame, text=t("main.logs"), command=self.open_log_window
         ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="设置", command=self.show_settings).pack(
+        ttk.Button(btn_frame, text=t("main.settings"), command=self.show_settings).pack(
             side=tk.RIGHT, padx=5
         )
         status_frame = ttk.Frame(self.main_frame)
         status_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(10, 0))
-        self.status_var = tk.StringVar(value="✅ 就绪 - 选择游戏版本")
+        self.status_var = tk.StringVar(value=t("main.ready"))
         status_label = ttk.Label(
             status_frame,
             textvariable=self.status_var,
@@ -213,14 +248,12 @@ class MainMixin:
         #（容器见 gui_core._make_settings_scrollable）
         ttk.Label(
             self.settings_body,
-            text="⚙️ 启动器设置",
+            text=t("settings.title"),
             font=("Microsoft YaHei", 14, "bold"),
         ).pack(pady=(0, 4))
         ttk.Label(
             self.settings_body,
-            text="「存档分类设置」只作用于当前这个存档；"
-            "「启动器设置」对所有存档都生效。\n"
-            "想换存档，回主界面用顶部的分类下拉框切换。",
+            text=t("settings.intro"),
             font=("Microsoft YaHei", 8),
             foreground="#555555",
             justify=tk.LEFT,
@@ -228,18 +261,18 @@ class MainMixin:
         ).pack(fill=tk.X, pady=(0, 12))
 
         # 两帧的标签列定同一个宽度，输入框才会左右对齐
-        label_w = self._label_col_width(SETTINGS_LABEL_TEXTS)
+        label_w = self._label_col_width(_settings_label_texts())
 
         # ---- 存档分类级：每个存档各自一套 ----
         content = ttk.LabelFrame(
             self.settings_body,
-            text="存档分类设置（每个存档独立）",
+            text=t("settings.profile_frame"),
             padding="12",
         )
         content.pack(fill=tk.X, pady=(0, 10))
         content.columnconfigure(0, minsize=label_w)
         row = 0
-        ttk.Label(content, text="分类名称:").grid(
+        ttk.Label(content, text=t("settings.label.profile_name")).grid(
             row=row, column=0, sticky=tk.W, pady=5
         )
         self.settings_profile_var = tk.StringVar()
@@ -249,7 +282,7 @@ class MainMixin:
             font=("Microsoft YaHei", 9, "bold"),
         ).grid(row=row, column=1, columnspan=2, sticky=tk.W, padx=5)
         row += 1
-        ttk.Label(content, text="数据目录:").grid(
+        ttk.Label(content, text=t("settings.label.data_dir")).grid(
             row=row, column=0, sticky=tk.W, pady=5
         )
         self.save_path_var = tk.StringVar()
@@ -258,18 +291,18 @@ class MainMixin:
         )
         ttk.Button(
             content,
-            text="浏览",
+            text=t("common.browse"),
             command=lambda: self._browse_dir(self.save_path_var),
         ).grid(row=row, column=2)
         row += 1
         _auto_wrap_hint(ttk.Label(
             content,
-            text="改这个路径只改「以后用哪个目录」，原有存档不会被搬走，需要自己搬。",
+            text=t("settings.hint.data_dir"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
         row += 1
-        ttk.Label(content, text="最小备份时间(分钟):").grid(
+        ttk.Label(content, text=t("settings.label.min_playtime")).grid(
             row=row, column=0, sticky=tk.W, pady=5
         )
         self.min_playtime_var = tk.IntVar()
@@ -290,12 +323,12 @@ class MainMixin:
         ).pack(side=tk.LEFT)
         _auto_wrap_hint(ttk.Label(
             spin_row,
-            text="← 一局玩不够这么久就跳过不备份",
+            text=t("settings.hint.min_playtime"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
         row += 1
-        ttk.Label(content, text="最大备份数量:").grid(
+        ttk.Label(content, text=t("settings.label.max_backups")).grid(
             row=row, column=0, sticky=tk.W, pady=5
         )
         self.max_backups_var = tk.IntVar()
@@ -312,21 +345,21 @@ class MainMixin:
         ).pack(side=tk.LEFT)
         _auto_wrap_hint(ttk.Label(
             max_row,
-            text="← 超出后自动删最旧的那一份",
+            text=t("settings.hint.max_backups"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
         row += 1
         self.auto_backup_var = tk.BooleanVar()
         ttk.Checkbutton(
-            content, text="启用自动备份", variable=self.auto_backup_var
+            content, text=t("settings.auto_backup"), variable=self.auto_backup_var
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
         content.columnconfigure(1, weight=1)
 
         # ---- 全局级：所有存档共用 ----
         glob = ttk.LabelFrame(
             self.settings_body,
-            text="启动器设置（所有存档共用）",
+            text=t("settings.global_frame"),
             padding="12",
         )
         glob.pack(fill=tk.X, pady=(0, 10))
@@ -338,7 +371,7 @@ class MainMixin:
         # 会把标签列撑宽 —— 那样下面几行的输入框又跟存档那组错开了。
         ttk.Checkbutton(
             glob,
-            text="启动游戏时隐藏窗口",
+            text=t("settings.hide_on_launch"),
             variable=self.hide_on_launch_var,
         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=3)
         # 和上面那个是一对：一个管「玩的时候窗口在哪」，一个管「玩完窗口还在不在」
@@ -347,14 +380,14 @@ class MainMixin:
         )
         ttk.Checkbutton(
             glob,
-            text="游戏退出后自动关闭启动器（自动备份做完才关）",
+            text=t("settings.close_on_exit"),
             variable=self.close_on_game_exit_var,
         ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=3)
         self.auto_update_var = tk.BooleanVar(
             value=self.config.get("auto_update")
         )
         ttk.Checkbutton(
-            glob, text="启动时自动检查更新", variable=self.auto_update_var
+            glob, text=t("settings.auto_update"), variable=self.auto_update_var
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=3)
         row = 3
         # ---- 启动器自身的更新 ----
@@ -362,7 +395,7 @@ class MainMixin:
         # （Anuken 的 jar），这个管**启动器自己**。默认 auto：后台下载，退出
         # 启动器时由外部执行体替换（Windows 不允许覆盖运行中的 exe）。
         # 只替换程序文件，**不碰** config.json / 备份 / 存档。
-        ttk.Label(glob, text="启动器更新:").grid(
+        ttk.Label(glob, text=t("settings.label.launcher_update")).grid(
             row=row, column=0, sticky=tk.W, pady=3
         )
         self.launcher_update_var = tk.StringVar(
@@ -371,7 +404,7 @@ class MainMixin:
         ttk.Combobox(
             glob,
             textvariable=self.launcher_update_var,
-            values=list(LAUNCHER_UPDATE_LABELS.values()),
+            values=list(launcher_update_labels().values()),
             state="readonly",
             font=self.font,
             width=28,
@@ -379,8 +412,32 @@ class MainMixin:
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
-            text="只换启动器程序本身，不动游戏版本、配置、备份和存档；"
-                 "源码运行时自动停用",
+            text=t("settings.hint.launcher_update"),
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
+        row += 1
+        # ---- 界面语言 ----
+        # ★ 这里只负责把选择**记下来**，「什么时候生效」由 save_and_return 决定：
+        #   界面上的文案是建控件那一刻取好的，要整体换语言只能重建两页 ——
+        #   而设置页只有「保存并返回」一个出口，那是唯一安全的重建时机
+        #   （重建会把设置页控件全销毁，绝不能发生在用户还在填表的时候）。
+        ttk.Label(glob, text=t("settings.label.language")).grid(
+            row=row, column=0, sticky=tk.W, pady=3
+        )
+        self.language_var = tk.StringVar(value=self._language_label_in_form())
+        ttk.Combobox(
+            glob,
+            textvariable=self.language_var,
+            values=list(language_labels().values()),
+            state="readonly",
+            font=self.font,
+            width=28,
+        ).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=3)
+        row += 1
+        _auto_wrap_hint(ttk.Label(
+            glob,
+            text=t("settings.hint.language"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
@@ -397,7 +454,7 @@ class MainMixin:
             row=row, column=0, columnspan=3, sticky=tk.EW, pady=6
         )
         row += 1
-        ttk.Label(glob, text="Java 路径(JRE/JDK):").grid(
+        ttk.Label(glob, text=t("settings.label.jre_path")).grid(
             row=row, column=0, sticky=tk.W, pady=3
         )
         self.jre_path_var = tk.StringVar(value=self._jre_path_for_form())
@@ -408,12 +465,12 @@ class MainMixin:
         jre_btns.grid(row=row, column=2, sticky=tk.W)
         ttk.Button(
             jre_btns,
-            text="浏览",
+            text=t("common.browse"),
             command=lambda: self._browse_dir(self.jre_path_var),
         ).pack(side=tk.LEFT)
         # 「检测」＝真跑一次 java -version（后台线程，不卡界面）
         ttk.Button(
-            jre_btns, text="检测", command=self.check_jre
+            jre_btns, text=t("settings.detect"), command=self.check_jre
         ).pack(side=tk.LEFT, padx=(4, 0))
         row += 1
         self._jre_check: tuple[str, bool, str] | None = None
@@ -432,8 +489,7 @@ class MainMixin:
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
-            text="填 JRE 或 JDK 的根目录都行（里面要有 bin\\java.exe）；"
-                 "只写 jre 表示启动器旁边那个",
+            text=t("settings.hint.jre_path"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
@@ -445,7 +501,7 @@ class MainMixin:
             row=row, column=0, columnspan=3, sticky=tk.EW, pady=6
         )
         row += 1
-        ttk.Label(glob, text="GitHub 镜像:").grid(
+        ttk.Label(glob, text=t("settings.label.mirror")).grid(
             row=row, column=0, sticky=tk.W, pady=3
         )
         self.github_mirror_var = tk.StringVar(
@@ -467,8 +523,7 @@ class MainMixin:
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
-            text="下载 jar 时拼在地址前做加速；留空＝直连 GitHub，"
-            "这个源拉不动会自动换下一个",
+            text=t("settings.hint.mirror"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
@@ -480,7 +535,7 @@ class MainMixin:
             row=row, column=0, columnspan=3, sticky=tk.EW, pady=6
         )
         row += 1
-        ttk.Label(glob, text="额外 JVM 参数:").grid(
+        ttk.Label(glob, text=t("settings.label.extra_vm")).grid(
             row=row, column=0, sticky=tk.W, pady=3
         )
         self.extra_vm_var = tk.StringVar(
@@ -493,12 +548,12 @@ class MainMixin:
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
-            text="加在 -cp 之前，如 -Xmx4G；空格分隔，含空格的项用英文双引号包住",
+            text=t("settings.hint.extra_vm"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
         row += 1
-        ttk.Label(glob, text="额外游戏参数:").grid(
+        ttk.Label(glob, text=t("settings.label.extra_prog")).grid(
             row=row, column=0, sticky=tk.W, pady=3
         )
         self.extra_prog_var = tk.StringVar(
@@ -511,7 +566,7 @@ class MainMixin:
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
-            text="传给游戏本体，加在主类之后（一般用不到，排查问题时才填）",
+            text=t("settings.hint.extra_prog"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
@@ -527,11 +582,11 @@ class MainMixin:
         )
         ttk.Checkbutton(
             glob,
-            text="把游戏输出保存到 logs/ 目录（关掉则只在日志窗口里实时显示）",
+            text=t("settings.save_game_log"),
             variable=self.save_game_log_var,
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=3)
         row += 1
-        ttk.Label(glob, text="日志保留份数:").grid(
+        ttk.Label(glob, text=t("settings.label.max_logs")).grid(
             row=row, column=0, sticky=tk.W, pady=(3, 5)
         )
         self.max_log_files_var = tk.IntVar(
@@ -556,7 +611,7 @@ class MainMixin:
         ).pack(side=tk.LEFT)
         _auto_wrap_hint(ttk.Label(
             keep_row,
-            text="← 超出后从最旧的开始丢（下次启动游戏生效）",
+            text=t("settings.hint.max_logs"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
@@ -573,13 +628,13 @@ class MainMixin:
         )
         ttk.Checkbutton(
             glob,
-            text="删除文件时直接彻底删除（不进回收站，不可还原）",
+            text=t("settings.permanent_delete"),
             variable=self.permanent_delete_var,
         ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=3)
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
-            text="← 只作用于存档目录 / 旧日志这类用户文件",
+            text=t("settings.hint.permanent_delete"),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
@@ -595,15 +650,34 @@ class MainMixin:
         #   确认键都在那儿，眼睛扫到右下角就知道点哪儿。两个都用同一个
         #   settings_footer（它 fill=X），所以 side=RIGHT 会一直贴到窗口右边。
         ttk.Button(
-            btn_frame, text="重置默认", command=self.reset_settings
+            btn_frame, text=t("settings.reset"), command=self.reset_settings
         ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
-            btn_frame, text="保存并返回", command=self.save_and_return
+            btn_frame, text=t("settings.save_return"), command=self.save_and_return
         ).pack(side=tk.RIGHT, padx=5)
 
     def show_main(self) -> None:
         self.settings_frame.pack_forget()
         self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+    def _language_label_in_form(self) -> str:
+        """当前配置的语言 → 下拉框里该显示的那一项。
+
+        认不出的值按 ``auto`` 显示 —— 与配置层的容错一致（那边会把它清成
+        auto 并 WARNING），这里只是不让下拉框出现空行。
+        """
+        labels = language_labels()
+        return labels.get(self.config.get("language"), labels[LANGUAGE_AUTO])
+
+    def _selected_language(self) -> str:
+        """下拉框文案 → 配置值。认不出就保持原值。
+
+        ★ 与 launcher_update 一条纪律：**绝不把界面文案当配置值写回去** ——
+          那个值要跨语言、跨版本活很久，是契约。
+        """
+        return language_values().get(
+            self.language_var.get(), self.config.get("language")
+        )
 
     def _load_profile_settings_into_form(self) -> None:
         """把当前存档分类的设置灌进设置页表单。"""
@@ -629,6 +703,7 @@ class MainMixin:
         self.launcher_update_var.set(
             launcher_update_label(self.config.get("launcher_update"))
         )
+        self.language_var.set(self._language_label_in_form())
         self.extra_vm_var.set(self.config.get("extra_vm_args"))
         self.extra_prog_var.set(self.config.get("extra_program_args"))
         self.save_game_log_var.set(self.config.get("save_game_log"))
@@ -650,7 +725,7 @@ class MainMixin:
         text = self.jre_path_var.get().strip()
         if not text:
             text = ConfigManager.JVM_DEFAULTS["jre_path"]
-        self.jre_check_var.set("⏳ 正在检测…")
+        self.jre_check_var.set(t("jre.checking"))
         self._start_jre_probe(self._java_exe_of(text))
 
     def _start_jre_probe(self, java_exe: Path) -> None:
@@ -664,22 +739,21 @@ class MainMixin:
         except Exception as e:                                # noqa: BLE001
             # probe_java 自己不抛；真出了意料之外的事也不能让这条线程静默死掉
             logger.error(f"Java 检测异常: {e}")
-            ok, text = False, f"检测出错：{e}"
+            ok, text = False, t("jre.probe_error", err=e)
         self.run_on_gui(lambda: self._apply_jre_probe(java_exe, ok, text))
 
     def _apply_jre_probe(self, java_exe: Path, ok: bool, text: str) -> None:
         self._jre_check = (str(java_exe), ok, text)
         self._render_jre_check()
         # 状态栏也报一句：保存后自动检测（人已经回到主界面了）就靠它
-        self.set_status(
-            f"{'✅' if ok else '❌'} Java{'可用' if ok else '不可用'}：{text}"
-        )
+        # 成功/失败是两条独立文案：拼出来的句子没法翻译（语序因语言而异）
+        self.set_status(t("jre.ok" if ok else "jre.fail", text=text))
 
     def _render_jre_check(self) -> None:
         """把最近一次检测结果画到设置页那一行上（换颜色 + 文案）。"""
         if self._jre_check is None:
             self.jre_check_var.set(
-                "点右边「检测」跑一次 java -version，确认它真能跑"
+                t("jre.idle")
             )
             color = "#777777"
         else:
@@ -693,7 +767,7 @@ class MainMixin:
 
     def show_settings(self) -> None:
         if self._game_is_running():
-            messagebox.showinfo("提示", "游戏运行中无法打开设置")
+            messagebox.showinfo(t("common.tip"), t("settings.game_running"))
             return
         self._load_profile_settings_into_form()
         self.main_frame.pack_forget()
@@ -704,9 +778,24 @@ class MainMixin:
 
         ★ 校验没过要**留在设置页** —— 那时候切回去，用户看到的是「点了按钮
         什么都没发生」，跟以前那个「没生效」的坑一模一样。
+
+        ★ 换了界面语言的话，这里是**唯一**安全的生效时机：把两页整个重建
+          （文案是建控件那一刻取好的，改不了）。放在「保存成功之后」是因为
+          校验没过时重建会把用户填了一半的表单连底下的界面一起换掉。
         """
-        if self.save_settings():
-            self.show_main()
+        if not self.save_settings():
+            return
+        if self._language_changed:
+            self._language_changed = False
+            logger.info(f"界面语言已切换为 {current_language()}，重建两页")
+            self.rebuild_for_language()
+            # 重建会把状态栏重置成初始文案，所以这条要**在重建之后**说，
+            # 而且用的是新语言 —— 用户才知道界面为什么突然变了。
+            self.set_status(
+                t("settings.language_changed", name=self.config.get_current_profile())
+            )
+            return
+        self.show_main()
 
     def save_settings(self) -> bool:
         """把设置页的改动写进 config.json，返回是否真的存下来了。
@@ -730,10 +819,8 @@ class MainMixin:
         except ValueError as e:
             logger.warning(f"启动参数校验失败: {e}")
             messagebox.showerror(
-                "启动参数有问题",
-                f"{e}\n\n"
-                "参数按空格分隔；如果某一项本身含空格，用英文双引号把它包起来，"
-                '例如 -Dfoo="a b"。',
+                t("err.args_title"),
+                t("err.args_body", err=e),
             )
             return False
         # 镜像地址同样先校验：填了个不像地址的东西，多半是想留空或填错，
@@ -743,10 +830,8 @@ class MainMixin:
         if mirror_text.strip() and not mirror:
             logger.warning(f"镜像地址不合法: {mirror_text!r}")
             messagebox.showerror(
-                "镜像地址有问题",
-                f"「{mirror_text.strip()}」不像有效的镜像地址。\n\n"
-                "填法是把加速前缀写全，例如 https://ghfast.top/\n"
-                "留空表示直连 GitHub（不加速）。",
+                t("err.mirror_title"),
+                t("err.mirror_body", text=mirror_text.strip()),
             )
             return False
         # Java 路径同样先看：这个目录里到底有没有 bin\java.exe。这里**只查
@@ -756,20 +841,16 @@ class MainMixin:
         if not jre_text:
             logger.warning("Java 路径为空")
             messagebox.showerror(
-                "Java 路径有问题",
-                "Java 路径不能为空。\n\n"
-                "只写「jre」＝启动器旁边那个 jre 文件夹；"
-                "也可以填 JRE / JDK 的绝对路径。",
+                t("err.jre_title"),
+                t("err.jre_empty"),
             )
             return False
         jre_exe = self._java_exe_of(jre_text)
         if not jre_exe.exists():
             logger.warning(f"Java 路径下没有 java.exe: {jre_exe}")
             messagebox.showerror(
-                "Java 路径有问题",
-                f"这个路径下没有找到 java.exe：\n\n{jre_exe}\n\n"
-                "要填的是 Java 的根目录（JRE 或 JDK 都行，里面有个 bin "
-                "子目录），不是 bin 目录本身，也不是 java.exe 文件。",
+                t("err.jre_title"),
+                t("err.jre_missing", path=jre_exe),
             )
             return False
         try:
@@ -779,14 +860,14 @@ class MainMixin:
         except tk.TclError as e:
             logger.warning(f"日志保留份数不合法: {e}")
             messagebox.showerror(
-                "日志保留份数有问题",
-                f"要填 1 到 {MAX_LOG_KEEP} 之间的整数。",
+                t("err.logs_title"),
+                t("err.logs_body", max=MAX_LOG_KEEP),
             )
             return False
         warnings = check_extra_args(extra_vm_args)
         if warnings and not messagebox.askyesno(
-            "启动参数可能有问题",
-            "\n".join("· " + w for w in warnings) + "\n\n仍然保存吗？",
+            t("warn.args_title"),
+            "\n".join("· " + w for w in warnings) + "\n\n" + t("warn.confirm"),
         ):
             return False
         new_path = self.save_path_var.get().strip()
@@ -795,7 +876,7 @@ class MainMixin:
                 self.config.set_profile_path(name, new_path, persist=False)
             except (KeyError, OSError) as e:
                 logger.error(f"更新存档目录失败: {e}")
-                messagebox.showerror("错误", f"更新存档目录失败: {e}")
+                messagebox.showerror(t("common.error"), t("err.save_dir", err=e))
                 return False
         # 分类级
         try:
@@ -810,11 +891,15 @@ class MainMixin:
             )
         except (KeyError, tk.TclError, ValueError) as e:
             logger.error(f"保存分类设置失败: {e}")
-            messagebox.showerror("错误", f"保存失败: {e}")
+            messagebox.showerror(t("common.error"), t("err.save", err=e))
             return False
         # 全局级
         old_mirror = self.config.get("github_mirror")
         old_jre = str(self.config.get_jvm("jre_path"))
+        # 语言：这里只算出「旧值 / 新值」，真正的切换放到存盘成功之后
+        # （见本方法末尾）—— 存盘要是失败了，界面不该已经换了语言。
+        old_language = self.config.get("language")
+        new_language = self._selected_language()
         self.config.set("hide_on_launch", self.hide_on_launch_var.get())
         self.config.set(
             "close_on_game_exit", self.close_on_game_exit_var.get()
@@ -825,11 +910,12 @@ class MainMixin:
         # （理论上不会）就保持原值 —— 绝不写进去一个界面文案当档位。
         self.config.set(
             "launcher_update",
-            LAUNCHER_UPDATE_VALUES.get(
+            launcher_update_values().get(
                 self.launcher_update_var.get(),
                 self.config.get("launcher_update"),
             ),
         )
+        self.config.set("language", new_language)
         self.config.set("extra_vm_args", extra_vm_text.strip())
         self.config.set("extra_program_args", extra_prog_text.strip())
         self.config.set("save_game_log", self.save_game_log_var.get())
@@ -839,6 +925,12 @@ class MainMixin:
         )
         self.config.set_jvm("jre_path", jre_text)
         self.config.save()
+        # ★ 界面语言：**存盘成功之后**才真切换。换语言要重建整个界面
+        #   （见 save_and_return），而万一存盘失败，界面保持原样才和磁盘上
+        #   那份配置对得上 —— 不然界面换了语言、配置里却没记住。
+        self._language_changed = new_language != old_language
+        if self._language_changed:
+            apply_setting(new_language)
         # ★ 用户刚在界面上指定了 Java 路径（而且上面校验过它真有 java.exe），
         #   所以本次启动的环境变量兜底作废 —— 不然界面写着 A、跑起来是 B。
         self._reset_java_override()
@@ -858,15 +950,14 @@ class MainMixin:
             self._start_jre_probe(jre_exe)
         # ★ 成功时不弹窗了：按钮叫「保存并返回」，切回主界面本身就是反馈，
         #   状态栏那句「设置已保存」在回到主界面后看得见。
-        self.set_status(f"✅ 存档「{name}」的设置已保存")
+        self.set_status(t("settings.saved", name=name))
         return True
 
     def reset_settings(self) -> None:
         name = self.config.get_current_profile()
         if messagebox.askyesno(
-            "确认重置",
-            f"把「{name}」的备份策略、全局开关、Java 路径恢复默认值？\n"
-            "（数据目录、存档分类列表和已有备份都不会被动）",
+            t("reset.title"),
+            t("reset.body", name=name),
         ):
             self.min_playtime_var.set(
                 ConfigManager.PROFILE_DEFAULTS["min_playtime"]
@@ -910,7 +1001,7 @@ class MainMixin:
                 ConfigManager.GLOBAL_DEFAULTS["permanent_delete"]
             )
             self.jre_path_var.set(ConfigManager.JVM_DEFAULTS["jre_path"])
-            self.set_status("已恢复默认值，点「保存并返回」以应用")
+            self.set_status(t("reset.done"))
 
     def _browse_dir(self, var: tk.StringVar) -> None:
         current = var.get().strip()

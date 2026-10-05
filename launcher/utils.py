@@ -19,6 +19,10 @@ from typing import Any
 __all__ = [
     "BASE_DIR",
     "DEV_LOG_NAME",
+    "LANGUAGE_AUTO",
+    "LANGUAGE_CODES",
+    "LANGUAGE_DEFAULT",
+    "LANGUAGES",
     "LOG_FILE",
     "LOG_NAME",
     "RESOURCE_DIR",
@@ -27,6 +31,7 @@ __all__ = [
     "atomic_write_text",
     "download_file",
     "logger",
+    "normalize_language",
     "parse_bool",
     "resource_path",
     "resolve_log_file",
@@ -111,6 +116,47 @@ def normalize_launcher_update(
     logger.warning(
         f"配置项 {what}={raw!r} 不是 {'/'.join(LAUNCHER_UPDATE_MODES)} 之一，"
         f"按默认 {default} 处理"
+    )
+    return default
+
+
+# ---- 界面语言（同样放这里，理由见上面的 parse_bool）----------------------
+# config 要**强转**这个值（界面选了要存、手改了要清），i18n 要拿它去取译文，
+# 而 i18n 只能依赖 utils（它要读语言包文件）—— 定义留在 config 或 i18n
+# 都会绕成循环 import。
+#
+# ★ 显示名用它**自己的语言**写：英文用户永远看到 "English"、中文用户看到
+#   「简体中文」。界面语言一旦认错，用户至少还能认出自己那一行 ——
+#   要是写成对方的语言，一个只懂英文的人会同时看不懂界面也看不懂选项。
+LANGUAGES: tuple[tuple[str, str], ...] = (
+    ("zh_CN", "简体中文"),
+    ("en_US", "English"),
+)
+LANGUAGE_CODES = tuple(code for code, _ in LANGUAGES)
+# 跟随系统：运行期由 i18n 解析成上面某一个具体 code。
+LANGUAGE_AUTO = "auto"
+# 认不出配置值时的落点。选中文而不是 auto：本项目的用户与文案都是中文优先，
+# 而 auto 在探测失败时最终还是要落回这里，绕一圈没有意义。
+LANGUAGE_DEFAULT = "zh_CN"
+
+
+def normalize_language(
+    raw: Any, *, what: str = "language", default: str = LANGUAGE_AUTO,
+) -> str:
+    """把「界面语言」清成 auto 或受支持的 code 之一。**不抛异常。**
+
+    ★ 认不出的值退 ``auto``（跟随系统），**不是**硬退中文：用户写的可能是
+    一门我们还没做的语言，跟随系统至少不会把他锁死在中文界面里。
+    ★ WARNING 里点名配置键 —— 与其它枚举项一样，用户得知道去 config.json
+    的哪一行改。
+    """
+    if isinstance(raw, str):
+        word = raw.strip()
+        if word == LANGUAGE_AUTO or word in LANGUAGE_CODES:
+            return word
+    logger.warning(
+        f"配置项 {what}={raw!r} 不是 {LANGUAGE_AUTO}/{'/'.join(LANGUAGE_CODES)}"
+        f" 之一，按 {default} 处理"
     )
     return default
 

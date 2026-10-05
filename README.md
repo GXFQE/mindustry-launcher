@@ -39,10 +39,12 @@ Windows 官方安装包默认也带）。
 MindustryLauncher.py    入口（约 20 行 wrapper，真正的代码在 launcher/）
 Launcher.spec           PyInstaller 打包配置
 mindustry.ico           窗口图标
+lang/                   界面文案（zh_CN.json / en_US.json，外面放一份即可覆盖）
 launcher/               全部源码
     version.py          ★ 唯一的版本号来源 + 兼容性常量（配置/清单格式版本）
     sources.py          ★ 版本来源注册表（从哪儿下游戏版本，加来源不用改代码）
     extensions.py       ★ 扩展点（加功能不用重新打包）
+    i18n.py             ★ 界面文案取词（t / 语言包 / 系统语言探测）
     utils.py            路径、日志、原子写、回收站
     config.py           配置读写（存档分类 + jvm 启动配置 + 迁移链）
     storage.py          CAS 存储、备份、拼装运行时 jar
@@ -66,7 +68,9 @@ LICENSE                 GNU GPL-3.0 全文
 
 ```bash
 python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（344 项）
+python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（28 项）
 python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（110 项，不起游戏）
+python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
 python _tools/build.py --deploy                  # 5. 构建 + 同步到部署目录
@@ -133,8 +137,9 @@ python _tools/verify/release_check.py
   就被删掉。
 - **开关型的键只认 `true`/`false`**（数字 `0`/`1` 也认）：`bool("false")` 在 Python 里是
   `True`，写成字符串会把开关**反过来**。写成别的值一律退回默认 + 一条 WARNING。
-- **枚举型的键**（如 `launcher_update` = `auto`/`check`/`off`）写成认不出的值同样退回默认
-  + WARNING，并且 WARNING 里会**点名是哪个键** —— 用户要拿这句话去 `config.json` 里找。
+- **枚举型的键**（如 `launcher_update` = `auto`/`check`/`off`，`language` = `auto`/`zh_CN`/`en_US`）
+  写成认不出的值同样退回默认 + WARNING，并且 WARNING 里会**点名是哪个键** ——
+  用户要拿这句话去 `config.json` 里找。
 
 另外两个「不动本体就能扩展」的口子：
 
@@ -145,6 +150,29 @@ python _tools/verify/release_check.py
 
 ⚠️ 扩展里的代码跟启动器**同权限**运行，只放自己写的或信得过的文件。
 设 `MDT_NO_EXTENSIONS=1` 可整体停用。
+
+## 界面语言
+
+界面文案全部放在 `lang/*.json` 里，代码只写 key（`t("settings.save_return")`）。
+设置页的「界面语言」有 `auto`（跟随系统界面语言）、`简体中文`、`English` 三档。
+
+- **`zh_CN.json` 是基准包**：新增文案先写它，再补别的语言。两份文件的 key 集合与
+  `{占位符}` 必须**完全一致** —— 占位符少一个是运行时才发现的，所以由
+  `_tools/verify/i18n_check.py` 静态盯着。
+- **换语言是「重建两页」**，不是逐条改文案：文案在建控件那一刻就取好了，不是引用。
+  逐个 `configure(text=...)` 去追必然漏，而漏了不会有任何机制报警。重建（几十毫秒）
+  是唯一不会漏的做法，时机只有设置页那个唯一出口「保存并返回」。
+- **找不到文案不会崩**：回退链 `当前语言 → zh_CN → 直接显示 key`，另加一条 WARNING。
+  界面上出现 `settings.save_return` 这种字样，就是有人漏了 key（比空白好定位）。
+- **语言包可以外部覆盖**：走 `resource_path()`，**exe 旁边的 `lang/` 优先于包内**
+  （`_internal/lang/`）。所以想改翻译、或者加一门新语言，放一份同名 JSON 到 exe 旁边即可，
+  **不必重新打包**（和 `jre/` 一个路子）。
+- **`MDT_LANG` 可以把语言钉死**（如 `MDT_LANG=en_US`）：这是给验证脚本用的解耦开关 ——
+  否则「用户把界面切成英文」会让一堆比中文文案的断言变红，而那**不是回归**。
+  钉死之后 `config.json` 里的值就管不着它了。
+
+加一门语言：在 `launcher/utils.py` 的 `LANGUAGES` 里加一行 `(code, 自称的名字)`，
+再补一份 `lang/<code>.json`。
 
 ## 启动器自更新
 

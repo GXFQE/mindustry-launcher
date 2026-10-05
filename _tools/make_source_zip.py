@@ -35,6 +35,7 @@ ITEMS = [
     "MindustryLauncher.py",   # 入口
     "Launcher.spec",          # 打包配置
     "mindustry.ico",          # 构建资源（spec 的 datas + icon 引用）
+    "lang",                   # ★ 界面文案（spec 的 datas 里也引用它；不收就构建失败）
     "launcher",               # 全部源码
     "_tools",                 # 开发工具（build / verify）
 ]

@@ -58,6 +58,14 @@ from sandbox_seed import seed_latest_versions
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # _tools/ 共用路径模块
 from _paths import ROOT, find_runtime_root   # noqa: E402
 
+# ★ 把界面语言钉死成中文（exe 继承 os.environ，所以这一句同时管住了那几个进程）。
+#
+# 场景 D 的判据是「报错**可读**」—— 它直接比中文提示的措辞。文案接进语言包之后，
+# 那句提示是**运行时**从 lang/zh_CN.json 取的，于是结果取决于生效语言：跑脚本的
+# 人系统是英文（或自己在设置里切了英文）就会红一片，而那**不是回归**。
+# 与 MDT_LOG_FILE 一个套路，见 launcher/i18n.py 的 docstring 第 3 条。
+os.environ["MDT_LANG"] = "zh_CN"
+
 USER32 = ctypes.windll.user32
 WM_CLOSE = 0x0010
 

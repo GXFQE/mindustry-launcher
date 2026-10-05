@@ -20,6 +20,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # _tools/ 共用路径模块
 from _paths import DATA, ROOT  # noqa: E402
 
+# ★ 把界面语言钉死成中文 —— 必须在 import launcher 之前（i18n 在 import 时装载）。
+#
+# 下面 game_windows() 靠「标题里有 Mindustry、且没有『启动器』」把启动器自己的
+# 窗口从搜索结果里排除掉。标题走了 i18n 之后，界面切成英文时它叫
+# "Mindustry Launcher - save …"，那两个字就匹配不上了 —— 这个过滤器会失效。
+# 与 MDT_LOG_FILE 一个套路，见 launcher/i18n.py 的 docstring 第 3 条。
+os.environ["MDT_LANG"] = "zh_CN"
+
 sys.path.insert(0, str(ROOT))
 os.chdir(DATA)
 

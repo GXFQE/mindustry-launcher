@@ -47,6 +47,16 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _paths import DATA  # noqa: E402
 
+# ★ 把界面语言钉死成中文 —— 必须在 import launcher 之前（i18n 在 import 时装载）。
+#
+# 下面有十来处断言是直接比中文文案的（``find_widget(..., "保存并返回")``、
+# ``"正在检测" in app.jre_check_var.get()``）。文案接进语言包之后，这些字符串
+# 在 **运行时** 才从 lang/zh_CN.json 取出来 —— 于是结果取决于「当前生效语言」：
+# 用户把界面切成英文（或系统本来就是英文）再跑这个脚本，会红一片，
+# 而那**不是回归**，是断言自己没有跟「用户设置」解耦。
+# 与 MDT_LOG_FILE 是同一个套路（见 launcher/i18n.py 的模块 docstring 第 3 条）。
+os.environ["MDT_LANG"] = "zh_CN"
+
 PASS: list[str] = []
 FAIL: list[str] = []
 
@@ -175,6 +185,13 @@ def make_sandbox() -> Path:
     (root / "versions" / "objects").mkdir(parents=True, exist_ok=True)
     (root / "backups" / "manifests").mkdir(parents=True, exist_ok=True)
     (root / "backups" / "objects").mkdir(parents=True, exist_ok=True)
+    # ★ 语言包也得在沙箱里。源码模式下 ``BASE_DIR`` 就是 cwd，而冒烟把 cwd 切到
+    #   了沙箱；``resource_path()`` 先看 BASE_DIR 再看 RESOURCE_DIR，两者此刻都
+    #   指向沙箱 —— 所以 lang/ 不在沙箱里就等于「语言包一个都没加载」，界面会
+    #   满屏 ``settings.save_return`` 这种 key（不是崩，但断言全红）。
+    #   拷一份既让界面有文案，也正好是**发布形态**：语言包跟着程序目录走，
+    #   exe 旁边放同名文件即可覆盖翻译（和 jre/ 是同一个机制）。
+    shutil.copytree(ROOT / "lang", root / "lang")
     return root
 
 
@@ -740,11 +757,13 @@ def main() -> int:
         update_combo = combo_of(app.launcher_update_var)
         check("设置页里有「启动器更新」下拉框", update_combo is not None)
         if update_combo is not None:
+            # 档位文案现在是函数（跟着语言走），不再是模块级常量 —— 见 i18n 那条
+            # 「文案不许放模块级常量」的纪律。这里每次现取。
+            update_labels = GM.launcher_update_labels()
             check("它的候选是三档文案（给用户看的，不是英文档位值）",
-                  list(update_combo["values"])
-                  == list(GM.LAUNCHER_UPDATE_LABELS.values()),
+                  list(update_combo["values"]) == list(update_labels.values()),
                   str(list(update_combo["values"])))
-            app.launcher_update_var.set(GM.LAUNCHER_UPDATE_LABELS["check"])
+            app.launcher_update_var.set(update_labels["check"])
             app.save_settings()
             app.root.update()
             saved_launcher_update = json.loads(
@@ -754,7 +773,7 @@ def main() -> int:
                   saved_launcher_update.get("launcher_update") == "check",
                   repr(saved_launcher_update.get("launcher_update")))
             # 还原，别影响后面的检查
-            app.launcher_update_var.set(GM.LAUNCHER_UPDATE_LABELS["auto"])
+            app.launcher_update_var.set(update_labels["auto"])
             app.config.set("launcher_update", "auto")
             app.root.update()
         if mirror_combo is not None:

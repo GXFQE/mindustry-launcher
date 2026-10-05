@@ -22,6 +22,7 @@ jre 不放进包里的原因见下方 datas 注释。
         _internal/          ← 文件夹模式才有，PyInstaller 的运行时
         jre/                ← 必须有（放在 exe 旁边）
         Mindustry.json      ← 有内置副本，外面放一份可覆盖
+        lang/               ← 有内置副本（_internal/lang），外面放一份可覆盖
         config.json / versions/ / Backups/   ← 运行时按需生成
 
 程序把「exe 所在目录」当作数据根，所以把整个目录挪到哪儿都行。
@@ -86,6 +87,12 @@ datas = [
     # 窗口图标还是打进包内：运行时 _setup_gui 用 resource_path() 找它，
     # 把 exe 挪到别处时窗口图标才不会丢。
     ("mindustry.ico", "."),
+    # ★ 语言包必须打包（2026-10-05 接 i18n）。
+    # 不带进包 = 打包版找不到任何翻译，界面会显示成一堆 key
+    # （``settings.save_return`` 这种），而源码运行一切正常 —— 最难发现的那类。
+    # 走 resource_path()：exe 旁边的 lang/ 优先，所以想改翻译/加语言，
+    # 在 exe 旁边放一份同名 JSON 就行，**不必重新打包**（和 jre/ 一个路子）。
+    ("lang", "lang"),
 ]
 
 binaries = [(_p, ".") for _p in

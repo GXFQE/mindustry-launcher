@@ -17,6 +17,7 @@ from . import gamecmd
 from .config import ConfigManager
 from .extensions import ExtensionRegistry
 from .gamelog import GameLog
+from .i18n import apply_setting, t
 from .sources import load_sources
 from .storage import CASStore, BackupManager, VersionManager
 from .updates import UpdateManager
@@ -34,6 +35,11 @@ class CoreMixin:
             f"{APP_NAME} {__version__} 启动，数据根 {self.base_dir}"
         )
         self.config = ConfigManager(self.config_file)
+        # ★ 界面语言必须在**建任何控件之前**定下来：控件上的文案是建的那一刻
+        #   取好的，之后再换语言只能把两页整个重建（见 rebuild_for_language）。
+        #   "auto" 在这里被解析成具体语言（跟随系统）。若语言被 MDT_LANG
+        #   钉死（测试/冒烟），这一步什么都不做。
+        apply_setting(self.config.get("language"))
         # 运行时数据根下的扩展目录（可选，默认不存在）。★ 只在这里建对象，
         # 真正载入放到「窗口已经能用之后」的后台步骤里 —— 启动路径上不许加 I/O。
         self.extensions = ExtensionRegistry(self.base_dir)
@@ -414,7 +420,7 @@ class CoreMixin:
         self.run_on_gui(lambda: self.status_var.set(text))
 
     def _setup_gui(self) -> None:
-        self.root.title("Mindustry 启动器")
+        self.root.title(t("app.title"))
         self.root.minsize(720, 540)
         ico = resource_path("mindustry.ico")
         if ico.exists():
@@ -425,10 +431,7 @@ class CoreMixin:
         # 必须在建下拉框之前/之后都一样生效（摘的是类绑定，跟建控件无关），
         # 但要赶在设置页挂上全局滚轮之前，免得第一下滚轮就被下拉框吃掉。
         self._disable_combo_wheel()
-        self.main_frame = ttk.Frame(self.root, padding=(15, 15))
-        self._make_settings_scrollable()
-        self._build_main_ui()
-        self._build_settings_ui()
+        self._build_pages()
         self._fit_root_window()
         self._load_profile_settings_into_form()
         self._refresh_profile_widgets()
@@ -439,6 +442,37 @@ class CoreMixin:
             # 说一句 —— 否则用户会对着「怎么不是我配的那个 JRE」发愣。
             self.set_status(f"⚠️ {self._jre_fix_note}")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _build_pages(self) -> None:
+        """建主界面与设置页这两页。
+
+        单独抽出来是为了**换语言时能再跑一遍**（见 rebuild_for_language）——
+        界面上的文案是建控件那一刻取好的，不是引用，改不了。
+        """
+        self.main_frame = ttk.Frame(self.root, padding=(15, 15))
+        self._make_settings_scrollable()
+        self._build_main_ui()
+        self._build_settings_ui()
+
+    def rebuild_for_language(self) -> None:
+        """换语言后把两页整个重建，并把状态恢复回去。
+
+        ★ 为什么不逐条改文案：一个个 ``configure(text=t(...))`` 去追必然会漏
+          —— 以后新加一个控件就漏一个，而且漏了没有任何机制会报。重建是
+          唯一不会漏的做法（代价是几十毫秒）。
+
+        恢复清单照抄 `_setup_gui` 里那一串，外加版本列表：那些控件都是新建的，
+        不重新灌数据用户会看到「界面变空了」。
+        """
+        self.main_frame.destroy()
+        self.settings_frame.destroy()
+        self._build_pages()
+        self._fit_root_window()
+        self._load_profile_settings_into_form()
+        self._refresh_profile_widgets()
+        self.show_main()
+        # 用缓存重填列表，不重新读盘 —— 换语言跟版本清单变没变是两件事。
+        self._apply_versions(self._current_versions())
 
     def _disable_combo_wheel(self) -> None:
         """摘掉 ttk 下拉框「滚轮换选项」的类绑定。

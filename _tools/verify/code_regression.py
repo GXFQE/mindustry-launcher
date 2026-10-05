@@ -1385,12 +1385,73 @@ def _calls_named(node, dotted):
     ]
 
 
+# ---- i18n：断言查的是「中文界面文案」，代码里可能写成 t("key") ----
+#
+# 2026-10-05 接 i18n 之后，界面文案从裸中文字面量改成了 ``t("settings.reset")``。
+# 这批断言原意是「设置页上还有没有一个叫『重置默认』的按钮」—— 它关心的是
+# **这条文案还在不在**，不是它有没有以字面量形式写出来。所以这里按基准语言包
+# （lang/zh_CN.json）把 key 反查成中文，两种写法都算命中。
+#
+# ★ 这样改还有一个额外好处：这些断言顺带把**基准语言包的措辞**也钉住了 ——
+#   谁把 "settings.reset" 的中文改成别的，这里会红。
+_ZH_PACK_CACHE: "dict[str, str] | None" = None
+
+
+def _zh_pack():
+    """基准语言包的 ``{key: 中文文案}``（跳过 ``_`` 开头的元数据键）。
+
+    读不到就返回空字典 —— 断言退化成「只认字面量」，是它 i18n 之前的行为，
+    不会因此误报通过。
+    """
+    global _ZH_PACK_CACHE
+    if _ZH_PACK_CACHE is None:
+        mapping: dict[str, str] = {}
+        try:
+            data = json.loads(
+                (ROOT / "lang" / "zh_CN.json").read_text(encoding="utf-8")
+            )
+            for key, value in data.items():
+                if not key.startswith("_") and isinstance(value, str):
+                    mapping[key] = value
+        except Exception:  # noqa: BLE001 - 语言包缺失不该把回归整体打挂
+            mapping = {}
+        _ZH_PACK_CACHE = mapping
+    return _ZH_PACK_CACHE
+
+
+def _text_of(node):
+    """把一个表达式节点还原成「它最终会显示的中文文案」（取不到返回 None）。
+
+    认两种写法：``"保存并返回"``（字面量）和 ``t("settings.save_return")``
+    （按 zh_CN 反查）。别的一律返回 None —— 尤其是**带参数的** ``t`` 调用
+    （``t("jre.ok", text=...)``）和 f-string，它们的中文是运行时才拼出来的，
+    静态取不准，宁可不认。
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if (isinstance(node, ast.Call) and _callee(node) == "t"
+            and len(node.args) == 1 and not node.keywords
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)):
+        return _zh_pack().get(node.args[0].value)
+    return None
+
+
 def _has_str(node, text):
-    """node 子树里出现过字符串常量 text 吗。"""
-    return any(
-        isinstance(n, ast.Constant) and n.value == text
-        for n in ast.walk(node)
-    )
+    """node 子树里出现过「文案 text」吗（字面量或 ``t("key")`` 都算）。"""
+    return any(_text_of(n) == text for n in ast.walk(node))
+
+
+def _has_text_containing(node, needle):
+    """node 子树里有没有哪条文案**包含子串** needle。
+
+    ``_has_str`` 要求整条相等，这里管「这句话里提没提到某个词」那类断言。
+    """
+    for n in ast.walk(node):
+        txt = _text_of(n)
+        if txt and needle in txt:
+            return True
+    return False
 
 
 def _refers(node, name):
@@ -1482,6 +1543,7 @@ def _button_pack_side(node, text):
 
     取不到返回 None（按钮不存在，或者 pack 没写 side）。只看
     ``ttk.Button(...).pack(side=tk.X)`` 这一种写法 —— 界面代码里就这一种。
+    ``text`` 可以是裸字面量，也可以是 ``t("key")``（见 ``_text_of``）。
     """
     for n in ast.walk(node):
         if not isinstance(n, ast.Call):
@@ -1495,8 +1557,7 @@ def _button_pack_side(node, text):
                 and btn.func.attr == "Button"):
             continue
         if not any(
-            k.arg == "text" and isinstance(k.value, ast.Constant)
-            and k.value.value == text
+            k.arg == "text" and _text_of(k.value) == text
             for k in btn.keywords
         ):
             continue
@@ -1682,9 +1743,7 @@ def test_settings_flow_and_autoclose():
           str(_button_pack_side(build, "重置默认")))
     check("设置页里有「游戏退出后自动关闭启动器」这一项",
           build is not None and _has_str(build, "close_on_game_exit")
-          and any(isinstance(n, ast.Constant) and isinstance(n.value, str)
-                  and "自动关闭启动器" in n.value
-                  for n in ast.walk(build)))
+          and _has_text_containing(build, "自动关闭启动器"))
 
     # 只要还有一个「不保存就能离开设置页」的按钮，用户就还能踩回那个坑
     leftovers = [

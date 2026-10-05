@@ -86,7 +86,7 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 | `python _tools/make_source_zip.py` | 生成 `Mindustry启动器_源码包_<日期>.zip` |
 | `python _tools/make_source_zip.py -o 名字.zip` | 指定输出名 |
 
-打出一个约 280 KB 的 zip，解压后在根目录跑 `python _tools/build.py`
+打出一个约 360 KB 的 zip，解压后在根目录跑 `python _tools/build.py`
 就能构建，**不需要项目里的任何其它文件**。
 
 收什么：源码 + `Launcher.spec` + 构建资源（`mindustry.ico`、`lang/`）+ 开发工具。
@@ -273,7 +273,7 @@ python _tools/verify/exe_edge_check.py       # 7. 改了启动/配置/日志路�
 ### 要交付的时候，看你交给谁
 
 ```bash
-# 给「想自己构建 / 看代码」的人 —— 280 KB 的源码包
+# 给「想自己构建 / 看代码」的人 —— 360 KB 的源码包
 python _tools/make_source_zip.py
 
 # 给「只想双击用」的人 —— 31 MB 的发布包 + 精简更新包（自带 Java）

@@ -1,5 +1,7 @@
 # Mindustry 启动器
 
+**简体中文** · [English](README.en.md)
+
 Mindustry 多版本启动器：同时管理多个游戏版本（CAS 内容寻址去重，相同文件只存一份）、
 按存档分类隔离数据目录、自动备份与恢复、更新检查、启动预热、自定义启动参数、
 游戏运行日志查看。
@@ -91,7 +93,7 @@ python _tools/verify/exe_edge_check.py           # 7. 改了启动/配置/日志
 
 | 交付物 | 命令 | 体积 | 给谁 |
 |---|---|---|---|
-| **源码包** | `python _tools/make_source_zip.py` | ~280 KB | 想自己构建、看代码的人 |
+| **源码包** | `python _tools/make_source_zip.py` | ~360 KB | 想自己构建、看代码的人 |
 | **发布包** | `python _tools/make_release_zip.py` | ~31 MB | 只想双击用的人（不需要 Python / Java） |
 | **更新包** | 上一条命令顺带生成 | ~2 MB | **已装旧版的人** —— 启动器自更新时下它 |
 

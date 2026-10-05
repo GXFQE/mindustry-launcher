@@ -30,8 +30,10 @@ DEFAULT_NAME = "Mindustry启动器_源码包_{date}.zip"
 
 # 要收的顶层条目（文件或目录）
 ITEMS = [
-    "README.md",              # 英文版 —— 仓库首页默认显示的就是它
+    "README.md",              # 英文版 —— 仓库首页默认显示的就是它（面向使用者）
     "README.zh_CN.md",        # 中文版（原版，两份互为译文）
+    "DEVELOPING.md",          # 开发文档（英文版）
+    "DEVELOPING.zh_CN.md",    # 开发文档（中文版）
     "LICENSE",                # 许可协议（GPL-3.0 全文）
     "MindustryLauncher.py",   # 入口
     "Launcher.spec",          # 打包配置

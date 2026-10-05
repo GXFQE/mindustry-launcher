@@ -75,10 +75,13 @@ class ExtensionAPI:
         """把 ``callback`` 挂到 ``hook`` 上。钩子名不认识会抛 ValueError。"""
         if hook not in _HOOK_SET:
             raise ValueError(
+                # i18n: keep —— 下面这几条都是**编程错误**（自己写扩展时把钩子名
+                # 拼错、忘了 register(api)…），不是用户会遇到的界面提示；
+                # 它们进日志给写扩展的人看，翻了反而不好搜索。
                 f"不认识的钩子「{hook}」（可用：{'、'.join(HOOKS)}）"
             )
         if not callable(callback):
-            raise TypeError("回调必须可调用")
+            raise TypeError("回调必须可调用")   # i18n: keep（编程错误）
         self._bound.append(hook)
         self._registry._add(hook, callback, self.name)
 
@@ -154,7 +157,7 @@ class ExtensionRegistry:
             register = getattr(module, "register", None)
             if register is None:
                 logger.warning(f"扩展 {path.name} 没有 register(api)，已跳过")
-                self._note_failure(path.name, "缺少 register(api)")
+                self._note_failure(path.name, "缺少 register(api)")  # i18n: keep
                 continue
             try:
                 register(ExtensionAPI(self, path.name))
@@ -174,7 +177,7 @@ class ExtensionRegistry:
         """按文件路径 import 一个模块（不往 sys.modules 里留垃圾名字）。"""
         spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:
-            raise ImportError(f"无法为 {path} 建立模块规格")
+            raise ImportError(f"无法为 {path} 建立模块规格")  # i18n: keep（编程错误）
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module

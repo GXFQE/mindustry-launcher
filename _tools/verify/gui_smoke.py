@@ -1037,6 +1037,68 @@ def main() -> int:
         app._make_backup_manager = real_backup_mgr
         app.root.deiconify = real_deiconify
 
+        print("\n[5b] 各管理窗口：文案得是真话，不许漏成 key")
+        # 「管理存档分类 / 版本 / 备份」这三扇窗都是**点开才建**的，前面各节
+        # 碰不到 —— 而它们恰恰是文案最密的地方（光 gui_profiles 就 98 条 key）。
+        # 挨个开一遍，把每个可见文本抠出来查：**凡是 `xxx.yyy` 形态的就是漏了
+        # key**（t() 找不到会原样返回 key，这比空白好定位，但也得有人盯着）。
+        # 顺带证明窗建得起来 —— 占位符传错的话建窗那一刻就会抛。
+        def looks_like_key(s: str) -> bool:
+            return (s.isascii() and "." in s and " " not in s
+                    and all(part.isidentifier() for part in s.split(".")))
+
+        def visible_texts(win) -> list[str]:
+            out: list[str] = []
+            stack = [win]
+            while stack:
+                w = stack.pop()
+                try:
+                    stack.extend(w.winfo_children())
+                except tk.TclError:
+                    pass
+                for opt in ("text", "title"):
+                    try:
+                        val = w.cget(opt)
+                    except tk.TclError:
+                        continue
+                    if isinstance(val, str) and val.strip():
+                        out.append(val)
+                # 详情区那类长文案走 textvariable（cget("text") 取不到），
+                # 而它恰恰是多行拼接、最容易漏 key 的地方
+                try:
+                    var = w.cget("textvariable")
+                    val = w.getvar(var) if var else ""
+                except tk.TclError:
+                    val = ""
+                if isinstance(val, str) and val.strip():
+                    out.append(val)
+            return out
+
+        for label, opener in (
+            ("管理存档分类", app.manage_profiles),
+            ("管理版本", app.manage_versions),
+            ("管理备份", app.manage_backups),
+        ):
+            before = list(app.root.winfo_children())
+            try:
+                opener()
+                app.root.update()
+            except Exception as e:                              # noqa: BLE001
+                check(f"「{label}」窗口建得起来", False,
+                      f"{type(e).__name__}: {e}")
+                continue
+            news = [w for w in app.root.winfo_children() if w not in before]
+            check(f"「{label}」窗口建得起来", bool(news))
+            if not news:
+                continue
+            win = news[-1]
+            texts = visible_texts(win)
+            leaks = [x for x in texts if looks_like_key(x)]
+            check(f"「{label}」里没有文案漏成 key（{len(texts)} 条可见文本）",
+                  not leaks, str(leaks[:4]))
+            win.destroy()
+            app.root.update()
+
         print("\n[6] 关闭")
         app._close_log_window()
         app.root.update()

@@ -68,6 +68,13 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _paths import DATA, MANIFESTS, VERSIONS  # noqa: E402
 
+# ★ 界面语言钉死成中文：这里有几处断言直接比**运行期**的中文（如 JRE 兜底那句
+#   「…系统里的 Java…」、probe_java 的失败原因）。不钉的话，用户把界面切成英文
+#   这些就红一片 —— 而那**不是回归**。必须在 import launcher 之前设：
+#   i18n 是在 import 时 bootstrap 的。
+#   （纯静态比中文的那些走 _has_str() 的语言包反查，不受这里影响。）
+os.environ["MDT_LANG"] = "zh_CN"
+
 import launcher.storage as S  # noqa: E402
 from launcher.gui_core import CoreMixin  # noqa: E402
 from launcher.gui_game import GameMixin  # noqa: E402

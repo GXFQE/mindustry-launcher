@@ -12,6 +12,7 @@ from tkinter import messagebox
 
 from .gamecmd import build_java_command, split_args
 from .gamelog import GameLog
+from .i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class GameMixin:
         # 就在导入、删除之后被调用，缓存不会过期。
         self._versions_cache = versions
         self.run_on_gui(lambda: self._apply_versions(versions))
-        self.set_status(f"✅ 已刷新版本列表 ({len(versions)} 个)")
+        self.set_status(t("game.refreshed", count=len(versions)))
 
     def _apply_versions(self, versions: list[dict]) -> None:
         """把一份已经读好的版本列表应用到界面。
@@ -54,7 +55,7 @@ class GameMixin:
     def _update_version_listbox(self, versions: list[dict]) -> None:
         self.version_listbox.delete(0, tk.END)
         if not versions:
-            self.version_listbox.insert(tk.END, "未找到游戏版本，请导入")
+            self.version_listbox.insert(tk.END, t("game.no_versions"))
             self.launch_btn.config(state=tk.DISABLED)
         else:
             for v in versions:
@@ -239,26 +240,31 @@ class GameMixin:
 
     def launch_game(self) -> None:
         if self._game_is_running():
-            messagebox.showwarning("警告", "已有游戏正在运行")
+            messagebox.showwarning(t("common.warning"), t("game.already_running"))
             return
         sel = self.version_listbox.curselection()
         if not sel:
-            messagebox.showwarning("警告", "请选择版本")
+            messagebox.showwarning(t("common.warning"), t("game.select_version"))
             return
         versions = self._current_versions()
         version = versions[sel[0]]
         profile = self.config.get_current_profile()
         save_path = self.config.get_current_save_path()
         if not messagebox.askyesno(
-            "确认启动",
-            f'启动 {version["name"]}？\n\n'
-            f"存档分类：{profile}\n"
-            f"数据目录：{save_path}",
+            t("game.confirm_title"),
+            t(
+                "game.confirm_body",
+                name=version["name"],
+                profile=profile,
+                path=save_path,
+            ),
         ):
             return
         if self.config.get("hide_on_launch"):
             self.root.withdraw()
-        self.set_status(f'🚀 启动 {version["name"]} (存档「{profile}」)...')
+        self.set_status(
+            t("game.launching", name=version["name"], profile=profile)
+        )
         self.launch_btn.config(state=tk.DISABLED)
         # 先亮牌再排队：后台 GC 要扫 3 万多个对象，跟拼 jar 抢盘只会
         # 两头都慢。在提交任务之前就置位，堵住「GC 抢在 _monitor_game
@@ -271,7 +277,7 @@ class GameMixin:
             # 否则「正在启动」永远亮着，后台 GC 会被永久挡在门外。
             logger.warning(f"无法开始启动游戏（线程池已关闭）: {e}")
             self._launching.clear()
-            self.set_status(f"❌ 无法启动游戏: {e}")
+            self.set_status(t("game.launch_failed", err=e))
             self.run_on_gui(lambda: self.launch_btn.config(state=tk.NORMAL))
             if self.config.get("hide_on_launch"):
                 self.run_on_gui(self.root.deiconify)
@@ -305,7 +311,7 @@ class GameMixin:
                 self._preheat_key_of(version_info), wait=True
             )
             if temp_jar is not None:
-                mark("复用预热JAR")
+                mark("复用预热JAR")            # i18n: keep —— 分段计时标签，只进日志
             else:
                 # 没有预热结果（刚启动就点了、或版本刚换过）：自己拼。
                 # 这个是临时文件，游戏退出后要删掉。
@@ -314,7 +320,7 @@ class GameMixin:
                 self.version_manager.build_runtime_jar(
                     version_info["type"], version_info["raw_version"], temp_jar
                 )
-                mark("拼装JAR")
+                mark("拼装JAR")                # i18n: keep（计时标签）
             java_exe = self._java_exe()
             jvm = self.config.get_jvm_config()
             main_class = jvm["main_class"]
@@ -337,7 +343,7 @@ class GameMixin:
                 data_dir.mkdir(parents=True, exist_ok=True)
             except OSError as e:
                 logger.warning(f"创建存档数据目录失败 {data_dir}: {e}")
-            mark("准备命令")
+            mark("准备命令")               # i18n: keep（计时标签）
             env = os.environ.copy()
             env["MINDUSTRY_DATA_DIR"] = str(data_dir)
             # 扩展点：拉起进程之前的最后一次改写机会（见 extensions.py）。
@@ -424,7 +430,7 @@ class GameMixin:
                     f"游戏输出收集启动失败（游戏本身不受影响）: {e}",
                     exc_info=True,
                 )
-            mark("拉起进程")
+            mark("拉起进程")               # i18n: keep（计时标签）
             logger.info(
                 "[启动耗时] "
                 + " | ".join(f"{k} {v:.0f}ms" for k, v in timings)
@@ -433,14 +439,20 @@ class GameMixin:
             # jar 拼好了、JVM 也起来了，磁盘空出来了，GC 可以干活了。
             self._launching.clear()
             self.set_status(
-                f'▶ {version_info["name"]} 运行中... (存档「{profile_name}」)'
+                t(
+                    "game.running",
+                    name=version_info["name"],
+                    profile=profile_name,
+                )
             )
             self._start_runtime_updater()
         except Exception as e:
             logger.error(f"游戏启动异常: {e}", exc_info=True)
-            self.set_status(f"❌ 错误: {e}")
+            self.set_status(t("game.error", err=e))
             self.run_on_gui(
-                lambda e=e: messagebox.showerror("错误", f"启动游戏失败: {e}")
+                lambda e=e: messagebox.showerror(
+                    t("common.error"), t("game.launch_error", err=e)
+                )
             )
             # 没拉起来：这次启动留下的东西由这里收干净（拉起来了的话
             # 全部交给 _game_session，它才是那个知道游戏什么时候结束的人）
@@ -489,7 +501,11 @@ class GameMixin:
                 proc.wait()
             playtime = (time.time() - start) / 60 if start else 0.0
             self.set_status(
-                f'⏹ {version_info["name"]} 已关闭 (运行 {playtime:.1f} 分钟)'
+                t(
+                    "game.closed",
+                    name=version_info["name"],
+                    playtime=playtime,
+                )
             )
             logger.info(
                 f"游戏 {version_info['name']} 退出，运行 {playtime:.1f} 分钟"
@@ -509,11 +525,11 @@ class GameMixin:
                 try:
                     self._make_backup_manager(profile_name).create_backup()
                     self.set_status(
-                        f"💾 自动备份完成 (存档「{profile_name}」)"
+                        t("game.backup_done", profile=profile_name)
                     )
                 except Exception as e:
                     logger.error(f"自动备份失败: {e}")
-                    self.set_status(f"❌ 自动备份失败: {e}")
+                    self.set_status(t("game.backup_failed", err=e))
         except Exception as e:
             logger.error(f"游戏会话异常: {e}", exc_info=True)
         finally:
@@ -559,10 +575,10 @@ class GameMixin:
             return False
         if self.update_manager.downloading.is_set():
             logger.info("游戏已退出，但正在下载版本包，暂不自动关闭启动器")
-            self.set_status("⏬ 还有下载在进行，暂不自动关闭启动器")
+            self.set_status(t("game.download_pending"))
             return False
         logger.info("游戏已退出，按设置自动关闭启动器")
-        self.set_status("游戏已退出，正在关闭启动器...")
+        self.set_status(t("game.exiting"))
         # 走用户点「关闭」时同一条路（on_closing）：收预热、存配置、关窗口，
         # 一样都不少。必须丢回 GUI 线程执行 —— tk 的控件只能在主线程销毁。
         self.run_on_gui(self.on_closing)
@@ -583,7 +599,7 @@ class GameMixin:
                 elapsed = int(time.time() - start)
                 mins, secs = divmod(elapsed, 60)
                 self.set_status(
-                    f"⏱ 游戏运行中 {mins:02d}:{secs:02d}",
+                    t("game.running_timer", mins=mins, secs=secs),
                     log_level=logging.DEBUG,
                 )
             self.root.after(1000, update)

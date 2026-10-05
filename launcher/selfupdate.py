@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import normalize_mirror
+from .i18n import t
 from .utils import (
     LAUNCHER_UPDATE_MODES,
     UNVERIFIED_SSL_CTX,
@@ -625,7 +626,7 @@ def apply_update_main(plan_path: Path) -> int:
     logger.info(f"开始应用更新 v{version} -> {app_dir}")
     if not _wait_for_exit(parent_pid):
         _write_state(app_dir, "failed", version,
-                     "等待旧进程退出超时，未做任何改动")
+                     t("selfupdate.wait_timeout"))
         return 3
 
     # 先内部文件、后 exe（见 docstring）
@@ -640,7 +641,7 @@ def apply_update_main(plan_path: Path) -> int:
             src = staging / rel
             dst = app_dir / rel
             if not src.is_file():
-                raise OSError(f"暂存区里没有 {rel}")
+                raise OSError(t("selfupdate.staged_missing", rel=rel))
             dst.parent.mkdir(parents=True, exist_ok=True)
             backup = dst.with_name(dst.name + BACKUP_SUFFIX)
             if backup.exists():
@@ -673,7 +674,8 @@ def apply_update_main(plan_path: Path) -> int:
                     os.replace(backup, dst)
             except OSError as rollback_err:                          # noqa: BLE001
                 logger.error(f"回滚 {dst} 也失败了: {rollback_err}")
-        _write_state(app_dir, "failed", version, f"替换失败：{e}")
+        _write_state(app_dir, "failed", version,
+                     t("selfupdate.replace_failed", err=e))
         return 4
 
     # 全部成功 → 清备份
@@ -686,7 +688,8 @@ def apply_update_main(plan_path: Path) -> int:
     # 整个暂存区（含 files/ 与 plan.json）一起清掉；删不掉也无所谓，
     # 下次更新会先 rmtree 再重建。
     shutil.rmtree(staged_root(app_dir), ignore_errors=True)
-    _write_state(app_dir, "done", version, f"已更新 {len(done)} 个文件")
+    _write_state(app_dir, "done", version,
+                 t("selfupdate.done_files", n=len(done)))
     logger.info(f"更新完成：v{version}")
     return 0
 
@@ -821,7 +824,7 @@ def check_and_stage(
         logger.info(f"读镜像配置失败，按直连处理: {e}")
         mirror = ""
 
-    status("🔍 正在检查启动器更新...")
+    status(t("selfupdate.checking"))
     info = fetch_latest_update()
     if info is None:
         return {"status": "latest"}
@@ -839,26 +842,26 @@ def check_and_stage(
     staging_root.mkdir(parents=True, exist_ok=True)
     zip_path = staging_root / "update.zip"
     size_txt = f"{info['size'] / 1048576:.1f} MB" if info.get("size") else "?"
-    status(f"📥 正在下载启动器更新 v{version}（{size_txt}）...")
+    status(t("selfupdate.downloading", version=version, size=size_txt))
     ok = download_update(
         info, zip_path, mirror=mirror, stop_event=stop_event,
         on_progress=lambda pct: status(
-            f"📥 下载启动器更新 v{version}: {pct:.1f}%",
+            t("selfupdate.download_progress", version=version, pct=pct),
             log_level=logging.DEBUG,
         ),
     )
     if not ok:
         zip_path.unlink(missing_ok=True)
         return {"status": "failed", "version": version,
-                "message": "更新包下载失败"}
+                "message": t("selfupdate.download_failed")}
 
-    status(f"📦 正在校验并解包 v{version}...")
+    status(t("selfupdate.verifying", version=version))
     exe_name = Path(sys.executable).name
     plan = stage_update(zip_path, staged_files_dir(app_dir), exe_name)
     zip_path.unlink(missing_ok=True)
     if plan is None:
         return {"status": "failed", "version": version,
-                "message": "更新包校验失败"}
+                "message": t("selfupdate.verify_failed")}
     plan_version = plan.version
     plan_path = write_plan(app_dir, plan, os.getpid())
     logger.info(f"启动器更新已就绪：v{plan_version}")

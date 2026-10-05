@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from collections.abc import Callable
 
 from .config import sanitize_version_name
+from .i18n import t
 from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
@@ -16,10 +17,10 @@ logger = logging.getLogger(__name__)
 class VersionsMixin:
     def manage_versions(self) -> None:
         if self._game_is_running():
-            messagebox.showinfo("提示", "游戏运行中无法管理版本")
+            messagebox.showinfo(t("common.tip"), t("versions.running"))
             return
         win = tk.Toplevel(self.root)
-        win.title("管理版本")
+        win.title(t("versions.title"))
         win.transient(self.root)
         win.grab_set()
         list_frame = ttk.Frame(win)
@@ -45,22 +46,22 @@ class VersionsMixin:
         def import_version() -> None:
             with self._release_grab(win):
                 jar_path = filedialog.askopenfilename(
-                    title="选择 desktop.jar",
-                    filetypes=[("JAR 文件", "*.jar")],
+                    title=t("versions.pick_jar"),
+                    filetypes=[(t("versions.jar_filter"), "*.jar")],
                     parent=win,
                 )
             if not jar_path:
                 return
             dlg = tk.Toplevel(win)
-            dlg.title("导入版本")
-            tk.Label(dlg, text="版本类型:").grid(
+            dlg.title(t("versions.import_title"))
+            tk.Label(dlg, text=t("versions.type_label")).grid(
                 row=0, column=0, padx=5, pady=5, sticky=tk.W
             )
             type_var = tk.StringVar(value="Mindustry")
             ttk.Combobox(
                 dlg, textvariable=type_var, values=["Mindustry", "MindustryX"]
             ).grid(row=0, column=1)
-            tk.Label(dlg, text="版本号:").grid(
+            tk.Label(dlg, text=t("versions.number_label")).grid(
                 row=1, column=0, padx=5, pady=5, sticky=tk.W
             )
             ver_var = tk.StringVar()
@@ -72,15 +73,15 @@ class VersionsMixin:
                     # 版本号会直接拼进清单文件名，先挡住 ／ \ 之类
                     ver = sanitize_version_name(ver_var.get())
                 except ValueError as e:
-                    messagebox.showerror("错误", str(e))
+                    messagebox.showerror(t("common.error"), str(e))
                     return
                 dlg.destroy()
-                self.set_status(f"正在导入 {vtype} {ver} ...")
+                self.set_status(t("versions.importing", type=vtype, ver=ver))
                 self.executor.submit(
                     self._import_task, Path(jar_path), vtype, ver, refresh
                 )
 
-            tk.Button(dlg, text="导入", command=do_import).grid(
+            tk.Button(dlg, text=t("versions.import"), command=do_import).grid(
                 row=2, columnspan=2, pady=10
             )
             dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
@@ -94,7 +95,10 @@ class VersionsMixin:
             if not sel:
                 return
             v = versions[sel[0]]
-            if messagebox.askyesno("确认删除", f"确定要删除 {v['name']} 吗？"):
+            if messagebox.askyesno(
+                t("versions.delete_title"),
+                t("versions.delete_confirm", name=v["name"]),
+            ):
                 self.version_manager.delete_version(
                     v["type"], v["raw_version"]
                 )
@@ -103,10 +107,10 @@ class VersionsMixin:
                 #   窗口里的局部列表，主列表还显示着已删的版本，点「启动
                 #   游戏」会直接报「清单不存在」。
                 self.refresh_versions()
-                self.set_status(f"✅ 已删除版本 {v['name']}，正在回收文件...")
+                self.set_status(t("versions.deleted", name=v["name"]))
                 # 回收要扫 3 万+ 个对象（十几秒），扔 GUI 线程上界面会假死
                 self.executor.submit(
-                    self._gc_task, f"已删除版本 {v['name']}"
+                    self._gc_task, t("versions.deleted_gc", name=v["name"])
                 )
 
         def rename_version() -> None:
@@ -116,8 +120,8 @@ class VersionsMixin:
             v = versions[sel[0]]
             with self._release_grab(win):
                 new_name = simpledialog.askstring(
-                    "重命名版本",
-                    "请输入新版本号:",
+                    t("versions.rename_title"),
+                    t("versions.rename_prompt"),
                     initialvalue=v["raw_version"],
                     parent=win,
                 )
@@ -131,7 +135,8 @@ class VersionsMixin:
                 for ver in versions
             ):
                 messagebox.showerror(
-                    "错误", f"版本 {v['type']} {new_name} 已存在"
+                    t("common.error"),
+                    t("versions.exists", type=v["type"], ver=new_name),
                 )
                 return
             try:
@@ -147,25 +152,29 @@ class VersionsMixin:
                 old_path.unlink(missing_ok=True)
             except Exception as e:
                 logger.error(f"重命名版本失败: {e}")
-                messagebox.showerror("错误", f"重命名失败: {e}")
+                messagebox.showerror(
+                    t("common.error"), t("versions.rename_failed", err=e)
+                )
                 return
             refresh()
             # 同上：主列表/缓存不同步的话，重命名后会点不动游戏
             self.refresh_versions()
-            self.set_status(f"✅ 版本已重命名为 {v['type']} {new_name}")
+            self.set_status(
+                t("versions.renamed", type=v["type"], ver=new_name)
+            )
 
-        ttk.Button(btn_frame, text="导入", command=import_version).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(btn_frame, text="删除", command=delete_version).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(btn_frame, text="重命名", command=rename_version).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(btn_frame, text="关闭", command=win.destroy).pack(
-            side=tk.RIGHT, padx=5
-        )
+        ttk.Button(
+            btn_frame, text=t("versions.import"), command=import_version
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame, text=t("versions.delete"), command=delete_version
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame, text=t("versions.rename"), command=rename_version
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame, text=t("common.close"), command=win.destroy
+        ).pack(side=tk.RIGHT, padx=5)
         self._fit_dialog(win, base_width=540, min_height=420)
 
     def _gc_task(self, done_msg: str) -> None:
@@ -176,10 +185,10 @@ class VersionsMixin:
         """
         try:
             self.version_manager.garbage_collect(self.stop_event)
-            self.set_status(f"✅ {done_msg}（文件已回收）")
+            self.set_status(t("versions.gc_done", msg=done_msg))
         except Exception as e:
             logger.error(f"垃圾回收失败: {e}")
-            self.set_status(f"⚠️ {done_msg}，但文件回收失败: {e}")
+            self.set_status(t("versions.gc_failed", msg=done_msg, err=e))
 
     def _import_task(
         self,
@@ -199,10 +208,14 @@ class VersionsMixin:
             )
             self.run_on_gui(refresh_cb)
             self.version_manager.garbage_collect(self.stop_event)
-            self.set_status(f"✅ 导入完成: {vtype} {ver}")
+            self.set_status(
+                t("versions.imported", type=vtype, ver=ver)
+            )
         except Exception as e:
             logger.error(f"导入版本失败: {e}")
-            self.set_status(f"❌ 导入失败: {e}")
+            self.set_status(t("versions.import_failed", err=e))
             self.run_on_gui(
-                lambda e=e: messagebox.showerror("导入失败", str(e))
+                lambda e=e: messagebox.showerror(
+                    t("versions.import_failed_title"), str(e)
+                )
             )

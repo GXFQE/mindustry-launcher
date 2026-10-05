@@ -260,7 +260,7 @@ class CoreMixin:
             self.config.set_jvm("jre_path", default_path)
             self.config.save()
             self._jre_fix_note = (
-                f"jre 路径「{jre_path}」里找不到 java.exe，已退回默认的 jre/"
+                t("core.jre_fallback_default", path=jre_path)
             )
             return
         # ★ 兜底第二层：内置 jre/ 也没有（没下 jre 包，或者自己填的路径写坏了
@@ -272,7 +272,7 @@ class CoreMixin:
         if system_java is not None:
             self._java_exe_override = system_java
             self._jre_fix_note = (
-                f"没有找到 jre 目录，这次先用系统里的 Java：{system_java}"
+                t("core.jre_use_system", path=system_java)
             )
             logger.warning(
                 f"内置 jre 不可用（{jre_exe}），本次改用 {system_java}（{why}）"
@@ -280,12 +280,7 @@ class CoreMixin:
             return
         logger.critical(f"JRE 未找到: {jre_exe}；环境变量兜底也没找到（{why}）")
         raise FileNotFoundError(
-            "没有找到 jre 目录。它需要和启动器放在同一个文件夹里：\n\n"
-            f"    {jre_exe}\n\n"
-            "请确认 jre 文件夹没有被删除或挪到别处。\n"
-            f"（也找过 JAVA_HOME 和 PATH 里的 Java，没找到能用的：{why}）\n"
-            "（如果你在设置页或 config.json 里改过 Java 路径，也检查一下那个"
-            f"路径对不对，当前是「{jre_path}」）"
+            t("core.jre_missing", exe=jre_exe, why=why, path=jre_path)
         )
 
     def _process_gui_queue(self) -> None:
@@ -389,7 +384,12 @@ class CoreMixin:
             self.on_closing()
             return
         v = versions[0]
-        for label, run_gc in (("单跑", False), ("GC并发", True)):
+        # i18n: keep —— 下面两个 label 只拼进 logger.info（诊断用，
+        # 要 MDT_BENCH_JAR=1 才跑），不是界面文案。日志一律不翻译。
+        for label, run_gc in (
+            ("单跑", False),      # i18n: keep
+            ("GC并发", True),     # i18n: keep
+        ):
             gc_thread = None
             if run_gc:
                 gc_thread = threading.Thread(

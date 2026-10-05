@@ -68,8 +68,8 @@ LICENSE                 GNU GPL-3.0 全文
 
 ```bash
 python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（344 项）
-python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（28 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（110 项，不起游戏）
+python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
+python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（116 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
@@ -155,6 +155,8 @@ python _tools/verify/release_check.py
 
 界面文案全部放在 `lang/*.json` 里，代码只写 key（`t("settings.save_return")`）。
 设置页的「界面语言」有 `auto`（跟随系统界面语言）、`简体中文`、`English` 三档。
+2026-10-05 起**全部模块（21 个源文件）已迁完，355 条 key**，门禁是条硬线：
+代码里再写死一条界面文案就当场报错。
 
 - **`zh_CN.json` 是基准包**：新增文案先写它，再补别的语言。两份文件的 key 集合与
   `{占位符}` 必须**完全一致** —— 占位符少一个是运行时才发现的，所以由
@@ -169,7 +171,15 @@ python _tools/verify/release_check.py
   **不必重新打包**（和 `jre/` 一个路子）。
 - **`MDT_LANG` 可以把语言钉死**（如 `MDT_LANG=en_US`）：这是给验证脚本用的解耦开关 ——
   否则「用户把界面切成英文」会让一堆比中文文案的断言变红，而那**不是回归**。
-  钉死之后 `config.json` 里的值就管不着它了。
+  钉死之后 `config.json` 里的值就管不着它了。（拿它验「切换本身」的脚本反过来要
+  **清掉**它，否则测不到用户改语言。`code_regression` / `gui_smoke` / `exe_edge_check`
+  / `e2e_launcher` 钉死；只有 `i18n_switch_smoke` 清掉。）
+- **什么不翻译**：日志一律保持中文（`logger.*`、`_add` 里的原样留着 —— 日志要能在任何
+  语言下被搜到、被贴进 issue）。同理：语言名自己（`简体中文` / `English`）、内部标识
+  （`APP_NAME`）、**写进 `config.json` 当数据用的名字**（默认分类名）、`what=` 诊断标签
+  （用户要拿它去 config.json 里找键名）。这些在代码里用 **`# i18n: keep`** 标出来
+  （标在行尾，或上方紧邻的纯注释块里），并在旁边写清为什么。判据只有一句：
+  **用户有可能在界面上读到它吗？**
 
 加一门语言：在 `launcher/utils.py` 的 `LANGUAGES` 里加一行 `(code, 自称的名字)`，
 再补一份 `lang/<code>.json`。

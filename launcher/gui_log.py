@@ -16,6 +16,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from .gamelog import GameLog
+from .i18n import t
 from .utils import LOG_FILE
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ def tail_text(path: Path, max_lines: int) -> str:
                 chunks.append(chunk)
                 newlines += chunk.count(b"\n")
     except OSError as e:
-        return f"（读取失败：{e}）"
+        return t("log.read_failed", err=e)
     data = b"".join(reversed(chunks))
     lines = data.decode("utf-8", errors="replace").splitlines()
     return "\n".join(lines[-max_lines:]) + "\n"
@@ -62,7 +63,7 @@ class LogMixin:
             return
         win = tk.Toplevel(self.root)
         self._log_win = win
-        win.title("运行日志")
+        win.title(t("main.logs"))
         win.transient(self.root)
         win.geometry("840x540")
         win.minsize(560, 320)
@@ -75,12 +76,12 @@ class LogMixin:
         foot = ttk.Frame(win)
         foot.pack(fill=tk.X, padx=10, pady=8)
         ttk.Button(
-            foot, text="打开日志文件夹", command=self._open_log_dir
+            foot, text=t("log.open_dir"), command=self._open_log_dir
         ).pack(side=tk.LEFT, padx=4)
         ttk.Button(
-            foot, text="复制游戏输出", command=self._copy_game_log
+            foot, text=t("log.copy_output"), command=self._copy_game_log
         ).pack(side=tk.LEFT, padx=4)
-        ttk.Button(foot, text="关闭", command=self._close_log_window).pack(
+        ttk.Button(foot, text=t("common.close"), command=self._close_log_window).pack(
             side=tk.RIGHT, padx=4
         )
 
@@ -150,12 +151,12 @@ class LogMixin:
 
     def _build_game_log_tab(self, nb: ttk.Notebook) -> None:
         tab = ttk.Frame(nb)
-        nb.add(tab, text="游戏输出")
+        nb.add(tab, text=t("log.tab.game"))
         head = ttk.Frame(tab)
         head.pack(fill=tk.X, padx=8, pady=(8, 0))
         self._log_follow = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            head, text="自动滚动到最新", variable=self._log_follow
+            head, text=t("log.auto_scroll"), variable=self._log_follow
         ).pack(side=tk.LEFT)
         self._log_state_var = tk.StringVar(value="")
         ttk.Label(
@@ -168,14 +169,14 @@ class LogMixin:
 
     def _build_launcher_log_tab(self, nb: ttk.Notebook) -> None:
         tab = ttk.Frame(nb)
-        nb.add(tab, text="启动器日志")
+        nb.add(tab, text=t("log.tab.launcher"))
         head = ttk.Frame(tab)
         head.pack(fill=tk.X, padx=8, pady=(8, 0))
-        ttk.Button(head, text="刷新", command=self._refresh_launcher_log).pack(
+        ttk.Button(head, text=t("log.refresh"), command=self._refresh_launcher_log).pack(
             side=tk.LEFT
         )
         ttk.Button(
-            head, text="用默认程序打开", command=self._open_launcher_log
+            head, text=t("log.open_default"), command=self._open_launcher_log
         ).pack(side=tk.LEFT, padx=6)
         self._launcher_log_info_var = tk.StringVar(value="")
         ttk.Label(
@@ -257,15 +258,19 @@ class LogMixin:
     @staticmethod
     def _game_log_state(log: GameLog, last: int, dropped: int) -> str:
         path = log.path
-        where = f" → {path}" if path else "（未落盘，仅本次显示）"
+        where = t("log.where.path", path=path) if path else t("log.where.none")
         if log.active:
-            state = f"● 正在收集{where}"
+            state = t("log.state.collecting", where=where)
         elif last:
-            state = f"○ 本次已结束，共 {last} 行{where}"
+            state = t("log.state.finished", lines=last, where=where)
         else:
-            state = "○ 还没有启动过游戏"
+            state = t("log.state.never")
         if dropped:
-            state += f"；内存只留最近 {GameLog.MAX_LINES} 行，已滚过 {dropped} 行"
+            state += t(
+                "log.state.dropped",
+                max=GameLog.MAX_LINES,
+                dropped=dropped,
+            )
         return state
 
     def _refresh_launcher_log(self, force: bool = False) -> None:
@@ -278,9 +283,9 @@ class LogMixin:
             stat = LOG_FILE.stat()
         except OSError:
             self._text_replace(
-                self._launcher_log_text, f"（读不到日志文件：{LOG_FILE}）"
+                self._launcher_log_text, t("log.unreadable", path=LOG_FILE)
             )
-            self._launcher_log_info_var.set("文件不存在")
+            self._launcher_log_info_var.set(t("log.no_file"))
             return
         text = tail_text(LOG_FILE, LAUNCHER_LOG_TAIL)
         shown = text.count("\n")
@@ -288,7 +293,7 @@ class LogMixin:
         self._launcher_log_text.see(tk.END)
         stamp = f"{stat.st_size / 1024:.0f} KB"
         if shown >= LAUNCHER_LOG_TAIL:
-            stamp += f"，只显示最后 {LAUNCHER_LOG_TAIL} 行"
+            stamp += t("log.tail_only", lines=LAUNCHER_LOG_TAIL)
         self._launcher_log_info_var.set(stamp)
 
     # ---------- 按钮 ----------
@@ -301,22 +306,26 @@ class LogMixin:
         try:
             os.startfile(target)
         except OSError as e:
-            messagebox.showerror("错误", f"打开目录失败: {e}")
+            messagebox.showerror(
+                t("common.error"), t("log.open_dir_failed", err=e)
+            )
 
     def _open_launcher_log(self) -> None:
         try:
             os.startfile(LOG_FILE)
         except OSError as e:
-            messagebox.showerror("错误", f"打开日志文件失败: {e}")
+            messagebox.showerror(
+                t("common.error"), t("log.open_log_failed", err=e)
+            )
 
     def _copy_game_log(self) -> None:
         text = self._game_log_text.get("1.0", tk.END)
         if not text.strip():
-            self.set_status("游戏输出还是空的")
+            self.set_status(t("log.output_empty"))
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        self.set_status(f"✅ 已复制游戏输出（{text.count(chr(10))} 行）")
+        self.set_status(t("log.copied", lines=text.count(chr(10))))
 
     def _close_log_window(self) -> None:
         if self._log_poll_id is not None:

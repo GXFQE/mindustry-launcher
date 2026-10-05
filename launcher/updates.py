@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigManager, normalize_mirror
+from .i18n import t
 from .storage import VersionManager
 from .utils import UNVERIFIED_SSL_CTX, download_file, parse_bool
 from .version import USER_AGENT
@@ -107,10 +108,10 @@ class UpdateManager:
 
         updates = self.get_available_updates()
         if not updates:
-            status("✅ 所有版本已是最新")
+            status(t("updates.all_latest"))
             return
         if silent:
-            status("📥 发现新版本，开始自动下载...")
+            status(t("updater.found_auto"))
             self.start_download_updates(updates, status_cb)
 
     def _fetch_release(self, source) -> dict | None:
@@ -194,14 +195,16 @@ class UpdateManager:
                     break
                 if status_cb:
                     status_cb(
-                        f"📥 正在下载 {info['type']} {info['version']}..."
+                        t("updater.downloading",
+                          type=info["type"], version=info["version"])
                     )
                 logger.info(f"开始下载 {info['type']} {info['version']}")
                 success = self._download_version(info, status_cb)
                 if not success:
                     if status_cb:
                         status_cb(
-                            f"❌ {info['type']} {info['version']} 下载失败"
+                            t("updater.download_failed",
+                              type=info["type"], version=info["version"])
                         )
                     logger.error(f"下载 {info['type']} {info['version']} 失败")
                     return
@@ -210,11 +213,11 @@ class UpdateManager:
                         f"下载并导入 {info['type']} {info['version']} 成功"
                     )
             if status_cb:
-                status_cb("✅ 所有更新已下载完成")
+                status_cb(t("updater.downloads_done"))
         except Exception as e:
             logger.error(f"下载序列异常: {e}")
             if status_cb:
-                status_cb(f"❌ 更新过程出错: {e}")
+                status_cb(t("updater.process_error", err=e))
         finally:
             # 无论怎么结束都要解锁，否则「检查更新」会被永久挡住
             self.downloading.clear()
@@ -244,7 +247,9 @@ class UpdateManager:
                 def progress(pct: float) -> None:
                     if status_cb:
                         status_cb(
-                            f"📥 下载 {info['type']} {info['version']}: {pct:.1f}%",
+                            t("updater.download_progress",
+                              type=info["type"], version=info["version"],
+                              pct=pct),
                             log_level=logging.DEBUG,
                         )
 

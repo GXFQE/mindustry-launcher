@@ -10,6 +10,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from tkinter import ttk
 
+from .i18n import t
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,10 +132,15 @@ class DialogMixin:
         title: str,
         prompt: str,
         items: list[str],
-        skip_label: str = "跳过",
+        skip_label: str | None = None,
         detail: str = "",
     ) -> str | None:
-        """让用户从存档分类里挑一个，返回名字；跳过/取消返回 None。"""
+        """让用户从存档分类里挑一个，返回名字；跳过/取消返回 None。
+
+        ``skip_label`` 留空就用当前语言的「跳过」—— 默认值不能写成
+        ``t("common.skip")``：参数默认值是**定义时**求值的，换语言不会变。
+        """
+        skip_label = skip_label or t("common.skip")
         picked: dict[str, str | None] = {"value": None}
         win = tk.Toplevel(parent)
         win.title(title)
@@ -180,7 +187,7 @@ class DialogMixin:
         box.bind("<Double-Button-1>", confirm)
         win.bind("<Return>", confirm)
         win.bind("<Escape>", lambda e: win.destroy())
-        ttk.Button(foot, text="确定", command=confirm).pack(
+        ttk.Button(foot, text=t("common.ok"), command=confirm).pack(
             side=tk.LEFT, padx=4
         )
         ttk.Button(foot, text=skip_label, command=win.destroy).pack(
@@ -198,19 +205,19 @@ class DialogMixin:
         src = Path(src)
         dst = Path(dst)
         if not src.is_dir():
-            return 0, f"源目录不存在: {src}"
+            return 0, t("dialog.copy.src_missing", path=src)
         src_r = src.resolve()
         dst_r = dst.resolve()
         if src_r == dst_r:
-            return 0, "源目录和目标目录是同一个"
+            return 0, t("dialog.copy.same_dir")
         if src_r.is_relative_to(dst_r):
-            return 0, "源目录在目标目录内部，会造成无限递归"
+            return 0, t("dialog.copy.src_in_dst")
         if dst_r.is_relative_to(src_r):
-            return 0, "目标目录在源目录内部，会造成无限递归"
+            return 0, t("dialog.copy.dst_in_src")
         try:
             dst.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            return 0, f"无法创建目标目录: {e}"
+            return 0, t("dialog.copy.mkdir_failed", err=e)
         copied = 0
         errors: list[str] = []
         for item in sorted(src.iterdir()):
@@ -218,7 +225,7 @@ class DialogMixin:
             if _is_link_like(item):
                 # 不跟随链接/junction：既是防无限递归，也是语义问题 ——
                 # "复制"会变成复制链接指向的那份内容，体积和结果都不对
-                errors.append(f"{item.name}: 是链接/junction，已跳过")
+                errors.append(t("dialog.copy.skipped_link", name=item.name))
                 logger.warning(f"跳过链接类条目: {item}")
                 continue
             try:

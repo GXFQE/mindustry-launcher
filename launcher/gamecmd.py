@@ -11,15 +11,16 @@ import subprocess
 from pathlib import Path
 
 from .gamelog import decode_output_line
+from .i18n import t
 
 logger = logging.getLogger(__name__)
 
 # 「额外 JVM 参数」里出现这些就说明用户在跟自己较劲：它们会跟启动器
 # 自己安排的东西打架。不拦，但要在保存时明确告诉他后果。
 _CONFLICTING_VM_FLAGS = {
-    "-cp": "会顶掉启动器组装好的运行时 jar（-cp 在下面会被整个覆盖）",
-    "-classpath": "会顶掉启动器组装好的运行时 jar",
-    "-jar": "会顶掉主类，游戏起不来",
+    "-cp": "args.conflict_cp",
+    "-classpath": "args.conflict_classpath",
+    "-jar": "args.conflict_jar",
 }
 _DATA_DIR_PREFIX = "-Dmindustry.data.dir"
 
@@ -47,7 +48,7 @@ def split_args(text: str) -> list[str]:
     与其猜，不如让调用方明确报错。
     """
     if "\x00" in text:
-        raise ValueError("参数里不能有 NUL 字符")
+        raise ValueError(t("args.err_nul"))
     args: list[str] = []
     cur: list[str] = []
     in_quote = False
@@ -66,7 +67,7 @@ def split_args(text: str) -> list[str]:
         cur.append(ch)
         started = True
     if in_quote:
-        raise ValueError("双引号没有闭合")
+        raise ValueError(t("args.err_unclosed_quote"))
     if started:
         args.append("".join(cur))
     return args
@@ -78,12 +79,9 @@ def check_extra_args(extra_vm_args: list[str]) -> list[str]:
     for arg in extra_vm_args:
         base = arg.split("=", 1)[0]
         if base in _CONFLICTING_VM_FLAGS:
-            warnings.append(f"「{arg}」{_CONFLICTING_VM_FLAGS[base]}")
+            warnings.append(t(_CONFLICTING_VM_FLAGS[base], arg=arg))
         elif arg.startswith(_DATA_DIR_PREFIX):
-            warnings.append(
-                f"「{arg}」会覆盖启动器的存档隔离 —— 换了存档分类也会读写"
-                "同一个目录，请确认这是你要的"
-            )
+            warnings.append(t("args.conflict_data_dir", arg=arg))
     return warnings
 
 
@@ -155,7 +153,7 @@ def probe_java(
     """
     java_exe = Path(java_exe)
     if not java_exe.is_file():
-        return False, f"找不到文件：{java_exe}"
+        return False, t("args.java_file_missing", path=java_exe)
     try:
         proc = subprocess.run(
             [str(java_exe), "-version"],
@@ -166,18 +164,23 @@ def probe_java(
             creationflags=_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
-        return False, f"执行超过 {timeout:.0f} 秒没结束（可能卡在杀软扫描）"
+        return False, t("args.java_timeout", sec=f"{timeout:.0f}")
     except OSError as e:
-        return False, f"无法运行：{e}"
+        return False, t("args.java_cannot_run", err=e)
     # 输出按行过同一个解码器：JVM 报的系统错（缺 DLL 之类）可能是 GBK 的中文
     lines = [decode_output_line(raw) for raw in (proc.stdout or b"").splitlines()]
     head = next((line.strip() for line in lines if line.strip()), "")
     joined = " ".join(lines)
     if proc.returncode != 0:
-        return False, f"退出码 {proc.returncode}：{head or '（没有输出）'}"
+        return False, t(
+            "args.java_exit_code", code=proc.returncode,
+            head=head or t("args.no_output"),
+        )
     found = _JAVA_VERSION_RE.search(joined)
     if not found:
-        return False, f"输出看不懂（不像 java -version）：{head or '（没有输出）'}"
+        return False, t(
+            "args.java_unknown_output", head=head or t("args.no_output")
+        )
     vendor = next(
         (v for v in _JAVA_VENDORS if v.lower() in joined.lower()), ""
     )
@@ -241,7 +244,7 @@ def find_system_java(
 
     if not candidates:
         logger.info("内置 jre 不可用，JAVA_HOME / PATH 里也没有 java.exe")
-        return None, "JAVA_HOME 和 PATH 里都没有找到 java.exe"
+        return None, t("args.java_not_in_env")
 
     for source, exe in candidates[:_JAVA_FIND_MAX_CANDIDATES]:
         ok, text = probe_java(exe, timeout=timeout)
@@ -249,6 +252,6 @@ def find_system_java(
             logger.warning(
                 f"内置 jre 不可用，改用 {source} 里的 Java：{exe}（{text}）"
             )
-            return exe, f"{source} 里的 {text}"
+            return exe, t("args.java_from_source", source=source, text=text)
         logger.warning(f"{source} 里的 java 用不了（{exe}）：{text}")
-    return None, "环境变量里找到的 java 都起不来（可能已被卸载）"
+    return None, t("args.java_env_all_dead")

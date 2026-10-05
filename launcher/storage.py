@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigManager, delete_path, sanitize_version_name
+from .i18n import t
 from .sources import SourceRegistry
 from .utils import atomic_write_json, zip_directory
 from .version import MANIFEST_VERSION
@@ -101,7 +102,9 @@ class CASStore:
             return self._object_path(sha).read_bytes()
         except FileNotFoundError:
             logger.error(f"对象丢失: {sha}")
-            raise FileNotFoundError(f"对象丢失: {sha}") from None
+            raise FileNotFoundError(
+                t("storage.object_missing", sha=sha)
+            ) from None
 
     def restore_directory(
         self, mapping: dict[str, str], dest_dir: Path
@@ -301,7 +304,7 @@ class VersionManager:
                 atomic_write_json(manifest_path, manifest)
         except zipfile.BadZipFile as e:
             logger.error(f"无效的 JAR 文件: {jar_path} - {e}")
-            raise ValueError(f"无效的 JAR 文件: {e}")
+            raise ValueError(t("storage.bad_jar", err=e))
         logger.info(f"添加版本 {vtype} {version}，清单: {manifest_path}")
 
     def build_runtime_jar(
@@ -310,7 +313,9 @@ class VersionManager:
         manifest_path = self.manifest_path(vtype, version)
         if not manifest_path.exists():
             logger.error(f"清单不存在: {manifest_path}")
-            raise FileNotFoundError(f"清单不存在: {manifest_path}")
+            raise FileNotFoundError(
+                t("storage.manifest_missing", path=manifest_path)
+            )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         items = list(manifest["files"].items())
         # 顺序读几千个小对象时，瓶颈是每次 open/read 的往返而不是带宽，
@@ -431,7 +436,7 @@ def _extract_zip_into(zip_path: Path, dest_dir: Path) -> None:
         for name in zf.namelist():
             target = (dest_dir / name).resolve()
             if target != dest_root and not target.is_relative_to(dest_root):
-                raise ValueError(f"快照条目路径越界，已拒绝解压: {name}")
+                raise ValueError(t("storage.zip_slip", name=name))
         zf.extractall(dest_dir)
 
 
@@ -457,7 +462,9 @@ class BackupManager:
         save_dir = Path(self.config.get_save_path(self.profile_name))
         if not save_dir.exists():
             logger.error(f"存档目录不存在: {save_dir}")
-            raise FileNotFoundError(f"存档数据目录不存在: {save_dir}")
+            raise FileNotFoundError(
+                t("storage.save_dir_missing", path=save_dir)
+            )
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         files = {}
         # ★ 与导入同理：对象先落盘、清单最后才写，中间不能有 GC 来扫
@@ -506,7 +513,9 @@ class BackupManager:
         save_dir = Path(self.config.get_save_path(self.profile_name))
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest.get("files"), dict):
-            raise ValueError(f"备份清单损坏（缺少 files 字段）: {manifest_path}")
+            raise ValueError(
+                t("storage.backup_manifest_corrupt", path=manifest_path)
+            )
 
         snapshot = self._make_rollback_snapshot(save_dir)
         keep_snapshot = False
@@ -530,9 +539,7 @@ class BackupManager:
                     f"回滚也失败，恢复前的快照保留在 {snapshot}: {rollback_e}"
                 )
                 raise RuntimeError(
-                    "恢复备份失败，且回滚也失败。\n\n"
-                    f"恢复前的完整快照已保留在：\n{snapshot}\n\n"
-                    "可以手动把它解压回数据目录。"
+                    t("storage.restore_rollback_failed", snapshot=snapshot)
                 ) from e
             raise
         finally:
@@ -553,13 +560,12 @@ class BackupManager:
             zip_directory(save_dir, snapshot)
             # 磁盘写满/被中断会留下一个半截 zip —— 那种"快照"等于没有
             if not zipfile.is_zipfile(snapshot):
-                raise OSError("生成的快照不是有效的 zip（可能磁盘空间不足）")
+                raise OSError(t("storage.snapshot_invalid"))
         except Exception as e:
             snapshot.unlink(missing_ok=True)
             logger.error(f"创建回滚快照失败，已取消恢复: {e}")
             raise RuntimeError(
-                "无法为当前存档创建安全快照，已取消恢复"
-                f"（存档目录未被改动）。\n\n{e}"
+                t("storage.snapshot_failed", err=e)
             ) from e
         logger.debug(f"回滚快照已就绪: {snapshot}")
         return snapshot

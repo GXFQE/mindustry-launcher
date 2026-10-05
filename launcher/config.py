@@ -24,6 +24,7 @@ from .utils import (
     normalize_launcher_update,
     parse_bool,
 )
+from .i18n import t
 from .version import CONFIG_VERSION
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,9 @@ PROFILE_NAME_RESERVED = {
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
+# i18n: keep —— 这个串身兼两职：① 首次启动建的那个分类**写进 config.json**（是数据，
+# 不是文案）；② default_data_dir() 拿它当判据决定走不走游戏原生目录。
+# 翻译它 = 换语言后老数据走错分支。界面上显示的名字用户能自己改。
 DEFAULT_PROFILE_NAME = "默认"
 
 # 版本号同样会直接拼进文件名（versions/manifests/<类型>_<版本>.json），
@@ -44,20 +48,20 @@ def sanitize_profile_name(name: str) -> str:
     """校验并规范化存档分类名（分类名会直接作为备份子目录名）。"""
     name = (name or "").strip()
     if not name:
-        raise ValueError("存档分类名不能为空")
+        raise ValueError(t("config.profile.empty"))
     if name in {".", ".."}:
-        raise ValueError("存档分类名不合法")
+        raise ValueError(t("config.profile.invalid"))
     bad = PROFILE_NAME_FORBIDDEN & set(name)
     if bad:
         raise ValueError(
-            "存档分类名不能包含这些字符: " + " ".join(sorted(bad))
+            t("config.profile.forbidden", chars=" ".join(sorted(bad)))
         )
     if name.endswith("."):
-        raise ValueError("存档分类名不能以英文句点结尾")
+        raise ValueError(t("config.profile.trailing_dot"))
     if name.upper() in PROFILE_NAME_RESERVED:
-        raise ValueError(f"「{name}」是系统保留名，请换一个")
+        raise ValueError(t("config.profile.reserved", name=name))
     if len(name) > 40:
-        raise ValueError("存档分类名不要超过 40 个字符")
+        raise ValueError(t("config.profile.too_long"))
     return name
 
 def sanitize_version_name(name: str) -> str:
@@ -69,18 +73,18 @@ def sanitize_version_name(name: str) -> str:
     """
     name = (name or "").strip()
     if not name:
-        raise ValueError("版本号不能为空")
+        raise ValueError(t("config.version.empty"))
     bad = VERSION_NAME_FORBIDDEN & set(name)
     if bad:
         raise ValueError(
-            "版本号不能包含这些字符: " + " ".join(sorted(bad))
+            t("config.version.forbidden", chars=" ".join(sorted(bad)))
         )
     if name in {".", ".."} or not name.strip("."):
-        raise ValueError("版本号不合法")
+        raise ValueError(t("config.version.invalid"))
     if any(ord(c) < 32 for c in name):
-        raise ValueError("版本号不能包含控制字符")
+        raise ValueError(t("config.version.control_char"))
     if len(name) > 40:
-        raise ValueError("版本号不要超过 40 个字符")
+        raise ValueError(t("config.version.too_long"))
     return name
 
 def roaming_dir() -> Path:
@@ -119,7 +123,7 @@ def move_to_recycle_bin(path: Path) -> None:
     if not path.exists() and not path.is_symlink():
         return
     if os.name != "nt":
-        raise OSError("移入回收站仅支持 Windows")
+        raise OSError(t("config.recycle.windows_only"))
 
     import ctypes
     from ctypes import wintypes
@@ -162,9 +166,9 @@ def move_to_recycle_bin(path: Path) -> None:
 
     code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
     if code != 0:
-        raise OSError(f"移入回收站失败（错误码 {code}）")
+        raise OSError(t("config.recycle.failed", code=code))
     if op.fAnyOperationsAborted:
-        raise OSError("操作已中止，未删除任何内容")
+        raise OSError(t("config.recycle.aborted"))
 
 def permanent_delete(path: Path) -> None:
     """直接彻底删除（**不进回收站，不可还原**）。
@@ -211,12 +215,12 @@ def dir_summary(path: Path) -> str:
     try:
         items = list(Path(path).iterdir())
     except OSError as e:
-        return f"无法读取（{e}）"
+        return t("config.dir.unreadable", err=e)
     if not items:
-        return "空目录"
+        return t("config.dir.empty")
     dirs = sum(1 for i in items if i.is_dir())
     files = len(items) - dirs
-    return f"{dirs} 个文件夹、{files} 个文件（仅顶层）"
+    return t("config.dir.summary", dirs=dirs, files=files)
 
 # 官方随包发布的默认 JVM 参数（原来放在独立的 Mindustry.json 里）。
 DEFAULT_VM_ARGS = [
@@ -533,7 +537,7 @@ class ConfigManager:
         ``while len(backups) > max_keep``，写成 0 就是把历史备份一次删光。
         """
         default = self.PROFILE_DEFAULTS[key]
-        what = f"分类「{name}」的 {key}"
+        what = f"分类「{name}」的 {key}"  # i18n: keep —— 诊断标签，拼进 WARNING
         if isinstance(default, bool):
             return normalize_bool(raw, default, what=what)
         if isinstance(default, int):
@@ -797,7 +801,7 @@ class ConfigManager:
 
     def set_jvm(self, key: str, value: Any) -> None:
         if key not in self.JVM_DEFAULTS:
-            raise KeyError(f"不是 jvm 配置项: {key}")
+            raise KeyError(f"不是 jvm 配置项: {key}")  # i18n: keep（编程错误）
         with self._lock:
             self.data["jvm"][key] = value
         logger.debug(f"jvm.{key} 设置为 {value!r}")
@@ -878,7 +882,7 @@ class ConfigManager:
 
     def set_profile_setting(self, name: str, key: str, value: Any) -> None:
         if key not in self.PROFILE_DEFAULTS:
-            raise KeyError(f"不是分类级配置项: {key}")
+            raise KeyError(f"不是分类级配置项: {key}")  # i18n: keep（编程错误）
         with self._lock:
             if name not in self.data["profiles"]:
                 raise KeyError(name)
@@ -911,7 +915,7 @@ class ConfigManager:
                 logger.warning(f"add_profile 收到不认识的设置项: {key}")
         with self._lock:
             if name in self.data["profiles"]:
-                raise ValueError(f"存档分类「{name}」已存在")
+                raise ValueError(t("profiles.exists", name=name))
             self.data["profiles"][name] = profile
         self.save()
         logger.info(f"新建存档分类「{name}」-> {save_path}")
@@ -924,7 +928,7 @@ class ConfigManager:
             if old not in self.data["profiles"]:
                 raise KeyError(old)
             if new in self.data["profiles"]:
-                raise ValueError(f"存档分类「{new}」已存在")
+                raise ValueError(t("profiles.exists", name=new))
             self.data["profiles"] = {
                 (new if k == old else k): v
                 for k, v in self.data["profiles"].items()
@@ -965,7 +969,7 @@ class ConfigManager:
             if name not in self.data["profiles"]:
                 raise KeyError(name)
             if len(self.data["profiles"]) <= 1:
-                raise ValueError("至少需要保留一个存档分类")
+                raise ValueError(t("config.profile.need_one"))
             del self.data["profiles"][name]
             if self.data["current_profile"] == name:
                 self.data["current_profile"] = next(iter(self.data["profiles"]))

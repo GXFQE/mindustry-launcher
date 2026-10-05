@@ -39,7 +39,7 @@ class ProfilesMixin:
         if name == self.config.get_current_profile():
             return
         if self._game_is_running():
-            messagebox.showinfo("提示", "游戏运行中无法切换存档分类")
+            messagebox.showinfo(t("common.tip"), t("profiles.busy_switch"))
             self._refresh_profile_widgets()
             return
         self.switch_profile(name)
@@ -48,46 +48,54 @@ class ProfilesMixin:
         try:
             self.config.set_current_profile(name)
         except KeyError:
-            messagebox.showerror("错误", f"存档分类「{name}」不存在")
+            messagebox.showerror(
+                t("common.error"), t("profiles.not_exist", name=name)
+            )
             self._refresh_profile_widgets()
             return
         self.backup_manager = self._make_backup_manager()
         self._refresh_profile_widgets()
         self.set_status(
-            f"✅ 已切换到存档分类「{name}」 "
-            f"({self.config.get_current_save_path()})"
+            t(
+                "profiles.switched",
+                name=name,
+                path=self.config.get_current_save_path(),
+            )
         )
 
     def open_current_save_dir(self) -> None:
         path = Path(self.config.get_current_save_path())
         if not path.exists():
             if not messagebox.askyesno(
-                "目录不存在",
-                f"数据目录还不存在：\n{path}\n\n是否创建并打开？",
+                t("profiles.dir_missing_title"),
+                t("profiles.data_dir_missing", path=path),
             ):
                 return
             try:
                 path.mkdir(parents=True, exist_ok=True)
             except OSError as e:
-                messagebox.showerror("错误", f"创建目录失败: {e}")
+                messagebox.showerror(
+                    t("common.error"), t("profiles.mkdir_failed", err=e)
+                )
                 return
         try:
             os.startfile(path)
         except OSError as e:
-            messagebox.showerror("错误", f"打开目录失败: {e}")
+            messagebox.showerror(
+                t("common.error"), t("profiles.open_dir_failed", err=e)
+            )
 
     def manage_profiles(self) -> None:
         if self._game_is_running():
-            messagebox.showinfo("提示", "游戏运行中无法管理存档分类")
+            messagebox.showinfo(t("common.tip"), t("profiles.busy_manage"))
             return
         win = tk.Toplevel(self.root)
-        win.title("管理存档分类")
+        win.title(t("profiles.title"))
         win.transient(self.root)
         win.grab_set()
         ttk.Label(
             win,
-            text="每个分类有各自独立的游戏数据目录、备份和备份策略；"
-            "启动前切换即可。★ 表示当前正在使用的分类。",
+            text=t("profiles.intro"),
             font=("Microsoft YaHei", 8),
             foreground="#555555",
             anchor=tk.W,
@@ -123,7 +131,13 @@ class ProfilesMixin:
             for n in names:
                 star = "★ " if n == current else "   "
                 listbox.insert(
-                    tk.END, f"{star}{n}    （{backup_count(n)} 个备份）"
+                    tk.END,
+                    t(
+                        "profiles.item_line",
+                        star=star,
+                        name=n,
+                        count=backup_count(n),
+                    ),
                 )
             if select in names:
                 idx = names.index(select)
@@ -144,22 +158,38 @@ class ProfilesMixin:
                 detail_var.set("")
                 return
             tag = (
-                "当前分类"
+                t("profiles.tag_current")
                 if name == self.config.get_current_profile()
-                else "未启用"
+                else t("profiles.tag_inactive")
             )
             data_dir = Path(self.config.get_save_path(name))
-            exists = "[存在]" if data_dir.is_dir() else "[目录不存在]"
+            exists = (
+                t("profiles.dir_exists")
+                if data_dir.is_dir()
+                else t("profiles.dir_absent")
+            )
+            auto = (
+                t("profiles.auto_on")
+                if self.config.get_profile_setting(name, "auto_backup")
+                else t("profiles.auto_off")
+            )
             detail_var.set(
-                f"【{name}】{tag}   {exists}\n"
-                f"数据目录：{data_dir}\n"
-                f"备份目录：{self.backup_base / name}\n"
-                f"备份数量：{backup_count(name)}    "
-                f"策略：{self.config.get_profile_setting(name, 'min_playtime')}"
-                f" 分钟 / 上限 "
-                f"{self.config.get_profile_setting(name, 'max_backups')} 个"
-                f" / 自动备份 "
-                f"{'开' if self.config.get_profile_setting(name, 'auto_backup') else '关'}"
+                t(
+                    "profiles.detail",
+                    name=name,
+                    tag=tag,
+                    exists=exists,
+                    data_dir=data_dir,
+                    backup_dir=self.backup_base / name,
+                    count=backup_count(name),
+                    min_playtime=self.config.get_profile_setting(
+                        name, "min_playtime"
+                    ),
+                    max_backups=self.config.get_profile_setting(
+                        name, "max_backups"
+                    ),
+                    auto=auto,
+                )
             )
 
         listbox.bind("<<ListboxSelect>>", show_detail)
@@ -168,17 +198,19 @@ class ProfilesMixin:
         def do_use() -> None:
             name = selected_name()
             if not name:
-                messagebox.showwarning("警告", "请先选择一个存档分类", parent=win)
+                messagebox.showwarning(
+                    t("common.warning"), t("profiles.need_select"), parent=win
+                )
                 return
             self.switch_profile(name)
             refresh(name)
-            detail_var.set(detail_var.get() + "\n\n✅ 已设为当前分类")
+            detail_var.set(detail_var.get() + t("profiles.set_current"))
 
         def do_new() -> None:
             with self._release_grab(win):
                 raw = simpledialog.askstring(
-                    "新建存档分类",
-                    "分类名称（例如：A 服、生存存档）:",
+                    t("profiles.new_title"),
+                    t("profiles.new_prompt"),
                     parent=win,
                 )
             if raw is None:
@@ -186,11 +218,11 @@ class ProfilesMixin:
             try:
                 name = sanitize_profile_name(raw)
             except ValueError as e:
-                messagebox.showerror("错误", str(e), parent=win)
+                messagebox.showerror(t("common.error"), str(e), parent=win)
                 return
             if name in self.config.get_profiles():
                 messagebox.showerror(
-                    "错误", f"存档分类「{name}」已存在", parent=win
+                    t("common.error"), t("profiles.exists", name=name), parent=win
                 )
                 return
 
@@ -201,7 +233,7 @@ class ProfilesMixin:
                 init_dir = roaming_dir()
             with self._release_grab(win):
                 picked = filedialog.askdirectory(
-                    title=f"选择「{name}」的游戏数据目录（取消则用默认）",
+                    title=t("profiles.pick_data_dir", name=name),
                     initialdir=str(init_dir),
                     parent=win,
                 )
@@ -211,7 +243,9 @@ class ProfilesMixin:
                 self.config.add_profile(name, str(target))
             except Exception as e:
                 logger.error(f"新建存档分类失败: {e}")
-                messagebox.showerror("错误", f"新建失败: {e}", parent=win)
+                messagebox.showerror(
+                    t("common.error"), t("profiles.create_failed", err=e), parent=win
+                )
                 return
             refresh(name)
             self.switch_profile(name)
@@ -226,14 +260,10 @@ class ProfilesMixin:
             if sources:
                 src_name = self._choose_profile_dialog(
                     win,
-                    "完全复制某个存档的数据",
-                    f"要把哪个存档的数据完整复制到「{name}」？\n"
-                    f"会复制该分类数据目录下的全部内容"
-                    f"（saves / mods / schematics / 各项设置等），"
-                    f"同名文件会被覆盖。\n"
-                    f"不复制就直接点「跳过」。",
+                    t("profiles.copy_pick_title"),
+                    t("profiles.copy_pick_prompt", name=name),
                     sources,
-                    detail=f"目标目录：\n{target}",
+                    detail=t("profiles.copy_target", target=target),
                 )
                 if src_name:
                     src = Path(self.config.get_save_path(src_name))
@@ -244,29 +274,39 @@ class ProfilesMixin:
                     )
                     if err:
                         messagebox.showwarning(
-                            "部分内容复制失败",
-                            f"已复制 {count} 项，但有失败：\n\n{err}",
+                            t("profiles.copy_partial_title"),
+                            t(
+                                "profiles.copy_partial_body",
+                                count=count,
+                                err=err,
+                            ),
                             parent=win,
                         )
                     else:
                         messagebox.showinfo(
-                            "复制完成",
-                            f"已从「{src_name}」完整复制 {count} 项到"
-                            f"「{name}」。",
+                            t("profiles.copy_done_title"),
+                            t(
+                                "profiles.copy_done_body",
+                                src_name=src_name,
+                                count=count,
+                                name=name,
+                            ),
                             parent=win,
                         )
                     refresh(name)
-            self.set_status(f"✅ 已新建并切换到存档分类「{name}」")
+            self.set_status(t("profiles.created", name=name))
 
         def do_rename() -> None:
             old = selected_name()
             if not old:
-                messagebox.showwarning("警告", "请先选择一个存档分类", parent=win)
+                messagebox.showwarning(
+                    t("common.warning"), t("profiles.need_select"), parent=win
+                )
                 return
             with self._release_grab(win):
                 raw = simpledialog.askstring(
-                    "重命名存档分类",
-                    "新的分类名称:",
+                    t("profiles.rename_title"),
+                    t("profiles.rename_prompt"),
                     initialvalue=old,
                     parent=win,
                 )
@@ -275,32 +315,36 @@ class ProfilesMixin:
             try:
                 new = sanitize_profile_name(raw)
             except ValueError as e:
-                messagebox.showerror("错误", str(e), parent=win)
+                messagebox.showerror(t("common.error"), str(e), parent=win)
                 return
             if new == old:
                 return
             if new in self.config.get_profiles():
                 messagebox.showerror(
-                    "错误", f"存档分类「{new}」已存在", parent=win
+                    t("common.error"), t("profiles.exists", name=new), parent=win
                 )
                 return
             old_bk = self.backup_base / old
             new_bk = self.backup_base / new
-            msg = f"将分类「{old}」重命名为「{new}」。\n\n"
+            msg = t("profiles.rename_msg_head", old=old, new=new)
             if old_bk.exists():
                 if new_bk.exists():
                     messagebox.showerror(
-                        "错误",
-                        f"目标备份目录已存在：\n{new_bk}\n请换一个名字。",
+                        t("common.error"),
+                        t("profiles.rename_bk_exists", new_bk=new_bk),
                         parent=win,
                     )
                     return
-                msg += f"备份目录一并改名：\n  {old_bk}\n  → {new_bk}\n\n"
-            msg += (
-                f"游戏数据目录不会被移动：\n"
-                f"  {self.config.get_save_path(old)}\n\n继续吗？"
+                msg += t(
+                    "profiles.rename_bk_move", old_bk=old_bk, new_bk=new_bk
+                )
+            msg += t(
+                "profiles.rename_msg_tail",
+                old_path=self.config.get_save_path(old),
             )
-            if not messagebox.askyesno("确认重命名", msg, parent=win):
+            if not messagebox.askyesno(
+                t("profiles.rename_confirm_title"), msg, parent=win
+            ):
                 return
             try:
                 if old_bk.exists():
@@ -308,7 +352,9 @@ class ProfilesMixin:
                 self.config.rename_profile(old, new)
             except Exception as e:
                 logger.error(f"重命名分类失败: {e}")
-                messagebox.showerror("错误", f"重命名失败: {e}", parent=win)
+                messagebox.showerror(
+                    t("common.error"), t("profiles.rename_failed", err=e), parent=win
+                )
                 return
             self.backup_manager = self._make_backup_manager()
             self._refresh_profile_widgets()
@@ -317,12 +363,14 @@ class ProfilesMixin:
         def do_change_path() -> None:
             name = selected_name()
             if not name:
-                messagebox.showwarning("警告", "请先选择一个存档分类", parent=win)
+                messagebox.showwarning(
+                    t("common.warning"), t("profiles.need_select"), parent=win
+                )
                 return
             old_path = self.config.get_save_path(name)
             with self._release_grab(win):
                 picked = filedialog.askdirectory(
-                    title=f"为「{name}」选择新的游戏数据目录",
+                    title=t("profiles.change_path_pick", name=name),
                     initialdir=(
                         old_path
                         if Path(old_path).is_dir()
@@ -335,17 +383,24 @@ class ProfilesMixin:
             if Path(picked).resolve() == Path(old_path).resolve():
                 return
             if not messagebox.askyesno(
-                "确认修改",
-                f"把「{name}」的数据目录改为：\n  {picked}\n\n"
-                f"原目录：\n  {old_path}\n\n"
-                f"原目录的内容不会被移动或删除，需要你自行迁移。\n继续吗？",
+                t("profiles.change_path_title"),
+                t(
+                    "profiles.change_path_body",
+                    name=name,
+                    picked=picked,
+                    old_path=old_path,
+                ),
                 parent=win,
             ):
                 return
             try:
                 self.config.set_profile_path(name, picked)
             except Exception as e:
-                messagebox.showerror("错误", f"修改失败: {e}", parent=win)
+                messagebox.showerror(
+                    t("common.error"),
+                    t("profiles.change_path_failed", err=e),
+                    parent=win,
+                )
                 return
             self._refresh_profile_widgets()
             refresh(name)
@@ -353,49 +408,57 @@ class ProfilesMixin:
         def do_open() -> None:
             name = selected_name()
             if not name:
-                messagebox.showwarning("警告", "请先选择一个存档分类", parent=win)
+                messagebox.showwarning(
+                    t("common.warning"), t("profiles.need_select"), parent=win
+                )
                 return
             path = Path(self.config.get_save_path(name))
             if not path.exists():
                 if not messagebox.askyesno(
-                    "目录不存在",
-                    f"{path}\n\n该目录尚不存在，是否创建后打开？",
+                    t("profiles.dir_missing_title"),
+                    t("profiles.dir_missing_open", path=path),
                     parent=win,
                 ):
                     return
                 try:
                     path.mkdir(parents=True, exist_ok=True)
                 except OSError as e:
-                    messagebox.showerror("错误", f"创建目录失败: {e}", parent=win)
+                    messagebox.showerror(
+                        t("common.error"),
+                        t("profiles.mkdir_failed", err=e),
+                        parent=win,
+                    )
                     return
             try:
                 os.startfile(path)
             except OSError as e:
-                messagebox.showerror("错误", f"打开目录失败: {e}", parent=win)
+                messagebox.showerror(
+                    t("common.error"),
+                    t("profiles.open_dir_failed", err=e),
+                    parent=win,
+                )
 
         def do_delete() -> None:
             """统一的删除入口：勾选要处理的内容，一次看清删什么。"""
             name = selected_name()
             if not name:
                 messagebox.showwarning(
-                    "还没选中",
-                    "请先在列表里点一下要删除的存档分类。",
+                    t("profiles.delete_no_select_title"),
+                    t("profiles.delete_no_select_body"),
                     parent=win,
                 )
                 return
             if len(self.config.get_profile_names()) <= 1:
                 messagebox.showinfo(
-                    "不能删除",
-                    f"「{name}」是目前唯一的存档分类，删掉启动器就没得用了。\n\n"
-                    "如果只是想清空它的游戏数据，可以在下面的对话框里"
-                    "只勾「游戏数据目录」。",
+                    t("profiles.delete_last_title"),
+                    t("profiles.delete_last_body", name=name),
                     parent=win,
                 )
                 return
             if self._game_is_running():
                 messagebox.showinfo(
-                    "游戏正在运行",
-                    "请先关闭游戏，再删除存档分类。",
+                    t("profiles.delete_running_title"),
+                    t("profiles.delete_running_body"),
                     parent=win,
                 )
                 return
@@ -413,27 +476,27 @@ class ProfilesMixin:
             # 『会移入回收站』的说明」比没有说明更糟。
             permanent = bool(self.config.get("permanent_delete"))
             data_dst = (
-                "直接彻底删除（不进回收站，删了找不回来）"
+                t("profiles.dst_permanent")
                 if permanent
-                else "Windows 回收站（通常可右键「还原」找回）"
+                else t("profiles.dst_recycle")
             )
             # 确认框里要接在「即将把下面这个目录……」后面，得自带动词
             data_confirm = (
-                "直接彻底删除（不进回收站，删了找不回来）"
+                t("profiles.dst_permanent")
                 if permanent
-                else "移入 Windows 回收站"
+                else t("profiles.confirm_recycle")
             )
 
             dlg = tk.Toplevel(win)
-            dlg.title("删除存档分类")
+            dlg.title(t("profiles.delete_title"))
             ttk.Label(
                 dlg,
-                text=f"即将处理存档分类「{name}」",
+                text=t("profiles.delete_heading", name=name),
                 font=("Microsoft YaHei", 12, "bold"),
             ).pack(anchor=tk.W, padx=14, pady=(14, 4))
             ttk.Label(
                 dlg,
-                text="勾选下面要一并处理的内容。全部勾选 = 把这个分类彻底删干净。",
+                text=t("profiles.delete_hint"),
                 font=("Microsoft YaHei", 8),
                 foreground="#555555",
             ).pack(anchor=tk.W, padx=14, pady=(0, 6))
@@ -442,13 +505,9 @@ class ProfilesMixin:
             btns = ttk.Frame(dlg)
             btns.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=(10, 14))
             note = (
-                "说明：数据目录会被直接彻底删除，不进回收站、无法还原"
-                "（设置里开着「删除文件时直接彻底删除」）。\n"
-                "备份记录移到 _trash 目录后不会被自动清理。"
+                t("profiles.delete_note_permanent")
                 if permanent
-                else "说明：数据目录会移入 Windows 回收站，通常可以右键「还原」"
-                "找回；\n但网络盘 / 非 NTFS 卷上没有回收站，系统这时会提示"
-                "「将永久删除」。\n备份记录移到 _trash 目录后不会被自动清理。"
+                else t("profiles.delete_note_recycle")
             )
             ttk.Label(
                 dlg,
@@ -491,36 +550,39 @@ class ProfilesMixin:
 
             add_item(
                 v_cfg,
-                "分类配置",
-                f"从 config.json 里移除「{name}」，"
-                f"启动器的存档列表里不再出现它。",
+                t("profiles.item_cfg_title"),
+                t("profiles.item_cfg_detail", name=name),
             )
             add_item(
                 v_bk,
-                f"备份记录（{n_backups} 条）",
-                f"{bk_dir}\n"
-                f"      →  {trash_dst}\n"
-                f"      移到回收目录，不会自动清理，需要时手动搬回来。",
+                t("profiles.item_bk_title", count=n_backups),
+                t(
+                    "profiles.item_bk_detail",
+                    bk_dir=bk_dir,
+                    trash_dst=trash_dst,
+                ),
                 enabled=n_backups > 0,
             )
             if data_exists:
                 extra = (
-                    "   ⚠️ 这是游戏原生数据目录，删了主力存档就没了！"
-                    if is_native
-                    else ""
+                    t("profiles.item_data_native_warn") if is_native else ""
                 )
                 add_item(
                     v_data,
-                    "游戏数据目录",
-                    f"{data_dir}\n"
-                    f"      [{dir_summary(data_dir)}]\n"
-                    f"      →  {data_dst}{extra}",
+                    t("profiles.item_data_title"),
+                    t(
+                        "profiles.item_data_detail",
+                        data_dir=data_dir,
+                        summary=dir_summary(data_dir),
+                        data_dst=data_dst,
+                        extra=extra,
+                    ),
                 )
             else:
                 add_item(
                     v_data,
-                    "游戏数据目录（当前不存在）",
-                    f"{data_dir}\n      这个目录不存在，无需处理。",
+                    t("profiles.item_data_missing_title"),
+                    t("profiles.item_data_missing_detail", data_dir=data_dir),
                     enabled=False,
                 )
 
@@ -530,37 +592,39 @@ class ProfilesMixin:
                 use_data = v_data.get()
                 if not (use_cfg or use_bk or use_data):
                     messagebox.showinfo(
-                        "什么都没勾",
-                        "没有勾选任何内容，未做任何操作。",
+                        t("profiles.nothing_checked_title"),
+                        t("profiles.nothing_checked_body"),
                         parent=dlg,
                     )
                     return
                 if use_cfg and not use_data and data_exists:
                     if not messagebox.askyesno(
-                        "会留下孤立目录",
-                        f"你勾了「分类配置」，但没勾「游戏数据目录」。\n\n"
-                        f"删掉分类后，下面这个目录会留在磁盘上没人管：\n"
-                        f"{data_dir}\n\n确定继续吗？",
+                        t("profiles.orphan_title"),
+                        t("profiles.orphan_body", data_dir=data_dir),
                         parent=dlg,
                         icon="warning",
                     ):
                         return
                 if use_data:
                     if is_native and not messagebox.askyesno(
-                        "⚠️ 高危操作",
-                        f"「{name}」的数据目录是 Mindustry 原生目录：\n"
-                        f"{data_dir}\n\n"
-                        f"把它删掉（即使进回收站）游戏就读不到存档了。\n\n"
-                        f"确定要一起删除吗？",
+                        t("profiles.danger_title"),
+                        t(
+                            "profiles.danger_body",
+                            name=name,
+                            data_dir=data_dir,
+                        ),
                         parent=dlg,
                         icon="warning",
                     ):
                         return
                     if not messagebox.askyesno(
-                        "最后确认",
-                        f"即将把下面这个目录{data_confirm}：\n\n"
-                        f"{data_dir}\n[{dir_summary(data_dir)}]\n\n"
-                        f"确认执行吗？",
+                        t("profiles.final_title"),
+                        t(
+                            "profiles.final_body",
+                            data_confirm=data_confirm,
+                            data_dir=data_dir,
+                            summary=dir_summary(data_dir),
+                        ),
                         parent=dlg,
                         icon="warning",
                     ):
@@ -573,24 +637,24 @@ class ProfilesMixin:
                     try:
                         trash_dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(bk_dir), str(trash_dst))
-                        done.append(f"备份记录 → {trash_dst}")
+                        done.append(t("profiles.done_bk", trash_dst=trash_dst))
                     except Exception as e:
                         logger.error(f"移动备份目录失败: {e}")
-                        failed.append(f"备份记录：{e}")
+                        failed.append(t("profiles.failed_bk", err=e))
                 if use_data and data_exists:
                     try:
                         delete_path(data_dir, permanent=permanent)
-                        done.append(f"游戏数据目录 → {data_dst}")
+                        done.append(t("profiles.done_data", data_dst=data_dst))
                     except Exception as e:
                         logger.error(f"删除数据目录失败: {e}")
-                        failed.append(f"游戏数据目录：{e}")
+                        failed.append(t("profiles.failed_data", err=e))
                 if use_cfg:
                     try:
                         self.config.remove_profile(name)
-                        done.append("分类配置 → 已从 config.json 移除")
+                        done.append(t("profiles.done_cfg"))
                     except Exception as e:
                         logger.error(f"移除分类配置失败: {e}")
-                        failed.append(f"分类配置：{e}")
+                        failed.append(t("profiles.failed_cfg", err=e))
 
                 self.backup_manager = self._make_backup_manager()
                 self._refresh_profile_widgets()
@@ -600,28 +664,30 @@ class ProfilesMixin:
                 if failed:
                     logger.error(f"删除分类「{name}」存在失败项: {failed}")
                     messagebox.showwarning(
-                        "部分操作失败",
-                        "已完成：\n  "
-                        + ("\n  ".join(done) if done else "无")
-                        + "\n\n失败：\n  "
+                        t("profiles.partial_title"),
+                        t("profiles.partial_done_head")
+                        + ("\n  ".join(done) if done else t("profiles.partial_none"))
+                        + t("profiles.partial_fail_head")
                         + "\n  ".join(failed),
                         parent=win,
                     )
-                    self.set_status(f"⚠️ 删除「{name}」时有失败项")
+                    self.set_status(
+                        t("profiles.delete_failed_status", name=name)
+                    )
                 else:
                     logger.info(f"删除分类「{name}」完成: {done}")
                     messagebox.showinfo(
-                        "处理完成",
-                        f"存档分类「{name}」：\n\n  "
+                        t("profiles.done_title"),
+                        t("profiles.done_body", name=name)
                         + "\n  ".join(done),
                         parent=win,
                     )
-                    self.set_status(f"✅ 已删除存档分类「{name}」")
+                    self.set_status(t("profiles.deleted_status", name=name))
 
             ttk.Button(
-                btns, text="执行删除", command=do_execute
+                btns, text=t("profiles.btn_execute"), command=do_execute
             ).pack(side=tk.LEFT, padx=4)
-            ttk.Button(btns, text="取消", command=dlg.destroy).pack(
+            ttk.Button(btns, text=t("common.cancel"), command=dlg.destroy).pack(
                 side=tk.LEFT, padx=4
             )
             dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
@@ -632,27 +698,27 @@ class ProfilesMixin:
 
         btn_frame = ttk.Frame(win)
         btn_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
-        ttk.Button(btn_frame, text="设为当前存档", command=do_use).pack(
-            side=tk.LEFT, padx=4
-        )
-        ttk.Button(btn_frame, text="新建分类", command=do_new).pack(
-            side=tk.LEFT, padx=4
-        )
-        ttk.Button(btn_frame, text="重命名", command=do_rename).pack(
-            side=tk.LEFT, padx=4
-        )
-        ttk.Button(btn_frame, text="修改路径", command=do_change_path).pack(
-            side=tk.LEFT, padx=4
-        )
-        ttk.Button(btn_frame, text="打开数据目录", command=do_open).pack(
-            side=tk.LEFT, padx=4
-        )
+        ttk.Button(
+            btn_frame, text=t("profiles.btn_use"), command=do_use
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(
+            btn_frame, text=t("profiles.btn_new"), command=do_new
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(
+            btn_frame, text=t("profiles.btn_rename"), command=do_rename
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(
+            btn_frame, text=t("profiles.btn_change_path"), command=do_change_path
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Button(
+            btn_frame, text=t("profiles.btn_open"), command=do_open
+        ).pack(side=tk.LEFT, padx=4)
         btn_frame2 = ttk.Frame(win)
         btn_frame2.pack(fill=tk.X, padx=10, pady=(6, 10))
         ttk.Button(
-            btn_frame2, text="删除此分类…", command=do_delete
+            btn_frame2, text=t("profiles.btn_delete"), command=do_delete
         ).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame2, text="关闭", command=win.destroy).pack(
+        ttk.Button(btn_frame2, text=t("common.close"), command=win.destroy).pack(
             side=tk.RIGHT, padx=4
         )
         self._fit_dialog(win, base_width=700, min_height=520)

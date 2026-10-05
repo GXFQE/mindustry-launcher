@@ -15,6 +15,7 @@ from pathlib import Path
 from tkinter import messagebox
 
 from . import selfupdate
+from .i18n import t
 from .version import __version__
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,14 @@ class UpdatesMixin:
         # 原来这里判的是 self.current_process（=游戏在跑），文案却写
         # 「下载正在进行」—— 游戏一开就点不动检查更新，还弹一句驴唇不对马嘴的话
         if running:
-            messagebox.showinfo("提示", "游戏运行中，请先关闭游戏再检查更新")
+            messagebox.showinfo(
+                t("common.tip"), t("updates.game_running")
+            )
             return
         if self.update_manager.downloading.is_set():
-            messagebox.showinfo("提示", "下载正在进行")
+            messagebox.showinfo(t("common.tip"), t("updates.downloading"))
             return
-        self.set_status("🔍 正在检查更新...")
+        self.set_status(t("updates.checking"))
         # 网络请求不能放在 GUI 线程里同步跑——断网时界面会一直僵着
         # 直到超时。丢到后台线程去，回来了再弹窗。
         threading.Thread(target=self._check_updates_task, daemon=True).start()
@@ -45,7 +48,7 @@ class UpdatesMixin:
         except Exception as e:
             logger.error(f"检查更新失败: {e}")
             self.run_on_gui(
-                lambda: self.set_status("❌ 检查更新失败，请检查网络")
+                lambda: self.set_status(t("updates.check_failed"))
             )
             return
         self.run_on_gui(lambda: self._show_update_result(updates))
@@ -53,26 +56,27 @@ class UpdatesMixin:
     def _show_update_result(self, updates: list) -> None:
         """回到 GUI 线程里弹窗询问（Tk 的控件只能在主线程碰）。"""
         if not updates:
-            self.set_status("✅ 所有版本已是最新")
-            messagebox.showinfo("检查更新", "所有版本已是最新")
+            self.set_status(t("updates.all_latest"))
+            messagebox.showinfo(
+                t("main.check_updates"), t("updates.all_latest")
+            )
             return
-        msg = (
-            "发现新版本：\n"
-            + "\n".join(f"- {u['type']} {u['version']}" for u in updates)
-            + "\n\n是否下载？"
+        msg = t(
+            "updates.found_body",
+            list="\n".join(f"- {u['type']} {u['version']}" for u in updates),
         )
-        if messagebox.askyesno("发现更新", msg):
-            self.set_status("开始下载...")
+        if messagebox.askyesno(t("updates.found_title"), msg):
+            self.set_status(t("updates.download_start"))
             self.update_manager.start_download_updates(
                 updates, status_callback=self.set_status
             )
         else:
-            self.set_status("已取消更新")
+            self.set_status(t("updates.cancelled"))
 
     def auto_update_check(self) -> None:
         if self.current_process:
             return
-        self.set_status("🔍 后台检查更新...")
+        self.set_status(t("updates.checking_bg"))
         # 故意用 daemon 线程而不是 self.executor：
         # executor 的线程是非 daemon 的，解释器退出时会 join 它们，
         # 而这里要发网络请求、断网时会一直卡到超时 ——
@@ -122,17 +126,20 @@ class UpdatesMixin:
             # 记下来，退出时交给执行体（见 _apply_staged_update）
             self.self_update_plan = result.get("plan_path")
             self.set_status(
-                f"✅ 启动器更新 v{version} 已就绪，关闭启动器时自动替换"
+                t("updates.self_staged", version=version)
             )
             logger.info(f"启动器更新 v{version} 已下载，等退出时应用")
         elif status == "available":
-            self.set_status(f"ℹ️ 启动器有新版本 v{version}（可在设置里开启自动更新）")
+            self.set_status(t("updates.self_available", version=version))
             url = str(result.get("html_url") or "")
             if url:
                 logger.info(f"启动器新版本下载页：{url}")
         elif status == "failed":
             self.set_status(
-                f"⚠️ 启动器更新下载失败：{result.get('message') or '未知原因'}"
+                t(
+                    "updates.self_failed",
+                    reason=result.get("message") or t("updates.unknown_reason"),
+                )
             )
         # latest / off：什么都不说（静默是默认状态）
 
@@ -149,17 +156,17 @@ class UpdatesMixin:
         version = str(state.get("version") or "?")
         selfupdate.clear_state(self.base_dir)
         if status == "done" and version == __version__:
-            self.set_status(f"✅ 启动器已更新到 v{version}")
+            self.set_status(t("updates.self_updated", version=version))
             logger.info(f"上次自更新已完成：v{version}")
         elif status == "done":
             # 文件换了、版本号却没变：被杀软拦下，或者用户自己又换回旧版
             logger.warning(
                 f"上次自更新写入了 v{version}，但当前仍是 v{__version__}"
             )
-            self.set_status(f"⚠️ 上次启动器更新（v{version}）没生效")
+            self.set_status(t("updates.self_previous_failed", version=version))
         elif status == "failed":
             logger.warning(f"上次自更新没完成：{state.get('message')}")
-            self.set_status("⚠️ 上次启动器更新没完成（详见 launcher.log）")
+            self.set_status(t("updates.self_previous_incomplete"))
 
     def _apply_staged_update(self) -> None:
         """退出前把已下载好的更新交给执行体。

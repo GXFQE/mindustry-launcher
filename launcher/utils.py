@@ -129,7 +129,7 @@ def normalize_launcher_update(
 #   「简体中文」。界面语言一旦认错，用户至少还能认出自己那一行 ——
 #   要是写成对方的语言，一个只懂英文的人会同时看不懂界面也看不懂选项。
 LANGUAGES: tuple[tuple[str, str], ...] = (
-    ("zh_CN", "简体中文"),
+    ("zh_CN", "简体中文"),   # i18n: keep —— 语言名一律用「本语言」写，翻过去就认不出了
     ("en_US", "English"),
 )
 LANGUAGE_CODES = tuple(code for code, _ in LANGUAGES)

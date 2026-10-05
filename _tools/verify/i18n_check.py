@@ -67,48 +67,29 @@ def check(label: str, ok: bool, detail: str = "") -> None:
           + (f"   {detail}" if detail else ""))
 
 
-# ---------- 基线：每个文件当前还剩多少条「写死的界面文案」----------
+# ---------- 基线：每个文件还剩多少条「写死的界面文案」----------
 #
-# 2026-10-05（i18n 地基落地那天）实测。合计 412 条。
+# ★ 2026-10-05：全部模块已迁完，基线清零。这是一张**空的硬门禁表** ——
+#   任何文件只要再写死一条界面文案，门禁当场报错（不在表里 = 要求 0 条）。
 #
-# ★ 用法 / 纪律：
-#   * 这份表是**上限**，不是目标值。迁移完一个模块，把它改到 0 或直接删掉这一行
-#     —— 那样以后谁再往那儿写死文案就会当场红。
-#   * **数字只许往下调。** 真需要调高，说明有人往代码里又塞了界面文案，该改成 t()。
-#   * 例外：**加中文日志 / 诊断标签**时数字可以 +1。日志刻意不翻译（要能在任何
-#     语言下被搜到、被贴进 issue），而静态分不清「这句中文会弹出来」还是「只写进
-#     日志」，所以它们一起算在数里。这类 +1 是允许的，改基线即可。
+# 想把某句话豁免掉，只有两个正当做法，**都不许往这张表里加数字**：
 #
-# 剩下的都是 GUI 模块里还没搬的文案（gui_profiles 最多），
-# 以及 config/gamecmd 这类「错误消息会经由对话框露出来」的模块。
-BASELINE_BARE: dict[str, int] = {
-    "gui_profiles.py": 153,
-    "gui_backup.py": 34,
-    "gui_versions.py": 34,
-    "config.py": 29,
-    "gui_game.py": 29,
-    "gui_log.py": 29,
-    "gui_updates.py": 25,
-    "gamecmd.py": 17,
-    "selfupdate.py": 11,
-    "storage.py": 10,
-    "updates.py": 9,
-    "gui_core.py": 8,
-    "gui_dialog.py": 8,
-    "extensions.py": 6,
-    "sources.py": 4,
-    "utils.py": 2,
-    "version.py": 2,
-    "gamelog.py": 1,
-    # 这一条不是界面文案：`normalize_log_keep(..., what="日志保留份数")` 里的
-    # 诊断标签（拼进那条 WARNING 的正文）。留在这里是为了别让它挡住别的检查。
-    "gui_main.py": 1,
-    # i18n.py 已经是 0：里面的中文全在 _note_once(...) 里（纯日志）。
-}
+#   ① 它是**故意不翻译**的 —— 语言名（`"简体中文"`）、内部标识（`APP_NAME`）、
+#      写进 config.json 当数据用的名字（`DEFAULT_PROFILE_NAME`）、
+#      只进日志的计时标签。做法：在那一行（或上方紧邻的纯注释块里）写
+#      `# i18n: keep`，并讲清为什么。
+#   ② 它根本不是给用户看的 —— 日志正文、`what=` 诊断标签、编程错误消息。
+#      这类走 bare_ui_strings() 里已有的豁免口径，别在这里破例。
+#
+# 判据就一句：**用户有可能在界面上读到它吗？** 会 → 进语言包；
+# 不会 → 上面两条之一。放不下的说明它不是"不翻译"，只是你懒得翻。
+BASELINE_BARE: dict[str, int] = {}
 
 # 语言解析：{name} / {max} 这种
 _PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
 _CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+# 行尾豁免标记：`# i18n: keep`（见 bare_ui_strings 的口径 ⑤）
+_KEEP_MARK = re.compile(r"#\s*i18n:\s*keep\b")
 
 
 # ---------- A. 语言包 ----------
@@ -207,8 +188,27 @@ def _is_docstring(node) -> bool:
 
 
 def bare_ui_strings(source: str) -> list[tuple[int, str]]:
-    """这份源码里「写死的界面文案」，返回 [(行号, 文案)]。"""
+    """这份源码里「写死的界面文案」，返回 [(行号, 文案)]。
+
+    什么算「界面文案」：含中日韩字符的字符串常量 —— 除非它命中了下面任何
+    一条豁免。豁免的口径要**窄而且有理由**，宽了就变成给自己开后门：
+
+      ① docstring —— 给读代码的人看的，不进界面
+      ② ``logger.*(...)`` / ``logging.*(...)`` / ``_note_once(...)``
+         （i18n 自己的日志出口）/ ``_add(...)``（gamelog 的行缓冲）——
+         日志正文一律不翻译：它是给开发者看的，而且换语言后新旧日志会混血
+      ③ ``t(...)`` 自己
+      ④ ``what=...`` 诊断标签（以及形参 ``what`` 的默认值）—— 它只拼进
+         那条 WARNING 的正文，是给用户拿去 config.json 里找键名的路标，
+         翻了反而对不上
+      ⑤ 行尾标了 ``# i18n: keep`` 的 —— 精确豁免。用于**故意不翻译**的
+         字符串（语言名「简体中文」、APP_NAME 这种内部标识、会写进
+         config.json 当数据用的名字）；标了就得在旁边写清为什么
+
+    ★ 别为了清零去放宽这里 —— 放不下的字符串应该老实进语言包。
+    """
     tree = ast.parse(source)
+    lines = source.splitlines()
     skip: set[int] = set()          # 要跳过的节点 id
 
     # ① docstring
@@ -218,34 +218,76 @@ def bare_ui_strings(source: str) -> list[tuple[int, str]]:
             body = getattr(node, "body", None)
             if body and _is_docstring(body[0]):
                 skip.add(id(body[0].value))
-    # ② logger.*(...) / logging.*(...) / _note_once(...) 里的（日志不翻译）
-    # ③ t(...) 里的
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = node.func
-        name = ""
-        if isinstance(fn, ast.Attribute):
-            base = fn.value
-            if isinstance(base, ast.Name):
-                name = f"{base.id}.{fn.attr}"
-        elif isinstance(fn, ast.Name):
-            name = fn.id
-        is_log = (name.startswith("logger.")
-                  or name.startswith("logging.")
-                  # i18n 自己的日志出口：它内部才调 logger，外面看不出来
-                  or name == "_note_once")
-        if is_log or name == "t":
-            for sub in ast.walk(node):
-                skip.add(id(sub))
+        # ② / ③：日志出口与 t() 的整棵实参树
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = ""
+            if isinstance(fn, ast.Attribute):
+                base = fn.value
+                if isinstance(base, ast.Name):
+                    name = f"{base.id}.{fn.attr}"
+            elif isinstance(fn, ast.Name):
+                name = fn.id
+            is_log = (name.startswith("logger.")
+                      or name.startswith("logging.")
+                      or name.endswith("._add")
+                      # i18n 自己的日志出口：它内部才调 logger，外面看不出来
+                      or name == "_note_once")
+            if is_log or name == "t":
+                for sub in ast.walk(node):
+                    skip.add(id(sub))
+
+            # ④ what= 诊断标签
+            for kw in node.keywords:
+                if kw.arg == "what":
+                    for sub in ast.walk(kw.value):
+                        skip.add(id(sub))
+
+        # ④ 形参 what 的默认值：def normalize_bool(raw, default, *, what="开关")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # 位置参数：defaults 跟参数列表「右对齐」（只覆盖最后几个）
+            pos = getattr(node.args, "posonlyargs", []) + list(node.args.args)
+            for a, d in zip(pos[len(pos) - len(node.args.defaults):],
+                            node.args.defaults):
+                if a.arg == "what":
+                    skip.add(id(d))
+            # 仅关键字参数：kw_defaults 与 kwonlyargs 一一对应（可能是 None）
+            for a, d in zip(node.args.kwonlyargs, node.args.kw_defaults):
+                if a.arg == "what" and d is not None:
+                    skip.add(id(d))
+
+    def _kept(lineno: int) -> bool:
+        """这一行的字符串是不是标了 `# i18n: keep`。
+
+        两种写法都认：① 标在字符串那一行的行尾；② 标在**上方紧邻的注释块**
+        里（长语句挤不下行尾注释，或者要写清楚为什么时用这种）。注释块只要
+        有一行带了标记就算 —— 往上扫到第一个非注释行为止，纯注释行不可能
+        是别的语句的一部分，所以不会误伤。
+        """
+        if not (1 <= lineno <= len(lines)):
+            return False
+        if _KEEP_MARK.search(lines[lineno - 1]):
+            return True
+        j = lineno - 2
+        while j >= 0 and lines[j].lstrip().startswith("#"):
+            if _KEEP_MARK.search(lines[j]):
+                return True
+            j -= 1
+        return False
 
     out: list[tuple[int, str]] = []
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Constant)
+        if not (isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and id(node) not in skip
                 and _CJK.search(node.value)):
-            out.append((node.lineno, node.value))
+            continue
+        lineno = node.lineno
+        if _kept(lineno):           # ⑤
+            continue
+        out.append((lineno, node.value))
     return out
 
 
@@ -329,6 +371,21 @@ def self_test() -> None:
           n('_note_once(f"缺文案 {k!r}")\n') == 0)
     check("不误报：送进 t() 的", n('ttk.Label(f, text=t("a.b"))\n') == 0)
     check("不误报：纯 ASCII", n('mod = "gui_main"\n') == 0)
+    check("不误报：_add(...) 里的（gamelog 的行缓冲，同样是日志）",
+          n('self._add(f"[启动器] 读输出中断: {e}")\n') == 0)
+    check("不误报：what= 诊断标签（拼进 WARNING 给用户找 config 键名）",
+          n('normalize_bool(v, True, what="开关")\n') == 0)
+    check("不误报：形参 what 的默认值",
+          n('def f(raw, *, what: str = "开关"):\n    return raw\n') == 0)
+    check("不误报：行尾标了 # i18n: keep 的（故意不翻译）",
+          n('APP_NAME = "Mindustry 启动器"  # i18n: keep\n') == 0)
+    check("不误报：上方注释块里标了 # i18n: keep 的",
+          n('# i18n: keep —— 内部标识\nAPP_NAME = "Mindustry 启动器"\n') == 0)
+    # ★ 基线清零之后，这两条才是真正要守住的东西
+    check("★ 新写一句界面文案必须当场被算出来（基线已清零）",
+          n('def f():\n    return "这是一句新写的界面文案"\n') == 1)
+    check("★ keep 只豁免自己那一条，不会顺手放过紧挨着的下一条",
+          n('# i18n: keep\nX = "内部标识"\ntext = "这是界面文案"\n') == 1)
 
     # --- t() 调用收集 ---
     calls = t_calls('t("jre.ok", text=x)\nkey = "jre.idle"\nt("jre.idle")\n')

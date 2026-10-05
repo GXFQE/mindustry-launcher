@@ -15,10 +15,10 @@
 
 # ---- 应用标识 ----------------------------------------------------------
 
-APP_NAME = "Mindustry 启动器"
+APP_NAME = "Mindustry 启动器"  # i18n: keep —— 内部标识（日志前缀 / 进程名 / 扩展命名空间）
 # 机器可读的名字：日志、User-Agent、扩展点里用它做命名空间。
 APP_ID = "mindustry-launcher"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # GitHub API 要求带 User-Agent；下载走的是浏览器式的 UA（见 utils.download_file，
 # 有些镜像站会按 UA 判断），两处别混用。
@@ -51,4 +51,6 @@ def version_string() -> str:
 def full_version() -> str:
     """带应用名的一行版本信息（日志/关于框用）。"""
     major, minor = MIN_PYTHON
+    # i18n: keep —— 跟着 APP_NAME 走的诊断串（full_version 只用于日志/排查，
+    # 界面上的一行版本信息另有 t("app.version_line")）
     return f"{APP_NAME} {__version__}（需要 Python {major}.{minor}+）"

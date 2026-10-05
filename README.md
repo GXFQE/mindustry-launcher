@@ -1,231 +1,278 @@
-# Mindustry 启动器
+# Mindustry Launcher
 
-**简体中文** · [English](README.en.md)
+[简体中文](README.zh_CN.md) · **English**
 
-Mindustry 多版本启动器：同时管理多个游戏版本（CAS 内容寻址去重，相同文件只存一份）、
-按存档分类隔离数据目录、自动备份与恢复、更新检查、启动预热、自定义启动参数、
-游戏运行日志查看。
+A multi-version launcher for Mindustry: manage several game versions side by side
+(CAS content-addressed dedup — identical files are stored only once), isolate save
+data per profile, automatic backup and restore, update checking, launch pre-warming,
+custom launch arguments, and a game log viewer.
 
-tkinter 界面，**只用 Python 标准库，没有任何第三方依赖**。
+tkinter GUI, **standard library only — no third-party dependencies**.
+
+> This is the English translation. The original is the Chinese
+> [README.zh_CN.md](README.zh_CN.md) — if the two ever disagree, the Chinese one wins.
 
 ---
 
-## 下载使用
+## Download and run
 
-不想折腾环境，就用 [Releases](../../releases/latest) 里的发布包：
+If you would rather not set up an environment, grab the release package from
+[Releases](../../releases/latest):
 
-1. 解压到一个**有写权限**的位置（别放 `C:\Program Files`、桌面这类地方）；
-2. 双击 `Mindustry启动器.exe`。
+1. Extract it somewhere you have **write permission** (not `C:\Program Files`,
+   not the Desktop);
+2. Double-click `Mindustry启动器.exe`.
 
-**内置 Java，不需要装 Python，也不需要单独装 Java。** 用法详见包内 `使用说明.txt`。
+**Java is bundled — you need neither Python nor a separate Java install.**
+See `使用说明.txt` inside the package for day-to-day usage.
 
-## 从源码运行
+## Running from source
 
-| 需要 | 说明 |
+| Requirement | Notes |
 |---|---|
-| Python 3.10+ | 代码用了 `X \| None` / `list[dict]` 等新语法 |
-| tkinter | **必须能真正创建 Tk 窗口**，不是只看装没装 |
-| PyInstaller | 仅构建 exe 需要：`python -m pip install pyinstaller` |
+| Python 3.10+ | The code uses `X \| None`, `list[dict]` and similar syntax |
+| tkinter | Must be able to **actually create a Tk window**, not merely be importable |
+| PyInstaller | Only needed to build the exe: `python -m pip install pyinstaller` |
 
 ```bash
 python MindustryLauncher.py
 ```
 
-⚠️ tkinter 是硬要求 —— 构建时要从解释器推导 tcl/tk 运行库的位置。如果
-`python -c "import tkinter; tkinter.Tk()"` 报错，换一个解释器（Anaconda 自带，
-Windows 官方安装包默认也带）。
+⚠️ tkinter is a hard requirement — the build needs to derive the location of the
+tcl/tk runtime from the interpreter. If `python -c "import tkinter; tkinter.Tk()"`
+errors out, use a different interpreter (Anaconda ships one; the official Windows
+installer does too).
 
-## 项目结构
+## Project layout
 
 ```
-MindustryLauncher.py    入口（约 20 行 wrapper，真正的代码在 launcher/）
-Launcher.spec           PyInstaller 打包配置
-mindustry.ico           窗口图标
-lang/                   界面文案（zh_CN.json / en_US.json，外面放一份即可覆盖）
-launcher/               全部源码
-    version.py          ★ 唯一的版本号来源 + 兼容性常量（配置/清单格式版本）
-    sources.py          ★ 版本来源注册表（从哪儿下游戏版本，加来源不用改代码）
-    extensions.py       ★ 扩展点（加功能不用重新打包）
-    i18n.py             ★ 界面文案取词（t / 语言包 / 系统语言探测）
-    utils.py            路径、日志、原子写、回收站
-    config.py           配置读写（存档分类 + jvm 启动配置 + 迁移链）
-    storage.py          CAS 存储、备份、拼装运行时 jar
-    updates.py          更新检查与下载（游戏本体）
-    selfupdate.py       ★ 启动器自身更新（查新版 → 下精简包 → 退出时换文件）
-    gamecmd.py          启动参数解析 + 命令行拼装
-    gamelog.py          游戏输出捕获（落盘 + 内存缓冲 + 管道编码兜底）
-    gui_core.py         界面内核：线程队列、状态栏、窗口骨架
-    gui_*.py            各功能页（主界面 / 启动 / 版本 / 存档分类 / 备份 / 日志 / 设置）
-_tools/                 开发辅助脚本（不参与打包，不属于程序）
-    _paths.py           ★ 脚本共用的路径来源
-    build.py            一键构建 + 部署
-    make_source_zip.py  生成源码包
-    make_release_zip.py 生成发布包
-    recycle.py          安全删除：移入回收站，绝不硬删
-    verify/             回归与验证脚本
-LICENSE                 GNU GPL-3.0 全文
+MindustryLauncher.py    Entry point (~20-line wrapper; the real code lives in launcher/)
+Launcher.spec           PyInstaller build config
+mindustry.ico           Window icon
+lang/                   UI strings (zh_CN.json / en_US.json; drop a copy next to the exe to override)
+launcher/               All source code
+    version.py          ★ The single source of version numbers + compatibility constants
+    sources.py          ★ Version-source registry (where game versions come from; add sources without code changes)
+    extensions.py       ★ Extension points (add features without repackaging)
+    i18n.py             ★ UI string lookup (t / language packs / system-language detection)
+    utils.py            Paths, logging, atomic writes, recycle bin
+    config.py           Config read/write (save profiles + jvm launch config + migration chain)
+    storage.py          CAS store, backups, runtime jar assembly
+    updates.py          Update checking and downloading (the game itself)
+    selfupdate.py       ★ Launcher self-update (check → download slim package → swap files on exit)
+    gamecmd.py          Launch-argument parsing + command-line assembly
+    gamelog.py          Game output capture (to disk + in-memory buffer + pipe-encoding fallback)
+    gui_core.py         GUI core: thread queue, status bar, window skeleton
+    gui_*.py            Feature pages (main / launch / versions / profiles / backups / log / settings)
+_tools/                 Developer scripts (not packaged, not part of the app)
+    _paths.py           ★ Shared path source for scripts
+    build.py            One-shot build + deploy
+    make_source_zip.py  Build the source zip
+    make_release_zip.py Build the release zip
+    recycle.py          Safe delete: move to the recycle bin, never hard-delete
+    verify/             Regression and verification scripts
+LICENSE                 Full GNU GPL-3.0 text
 ```
 
-## 开发流程
+## Development workflow
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（344 项）
-python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（116 项，不起游戏）
-python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
-python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
-python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
-python _tools/build.py --deploy                  # 5. 构建 + 同步到部署目录
-python _tools/verify/packed_code_check.py        # 6. 确认新代码真进了 exe
-python _tools/verify/exe_edge_check.py           # 7. 改了启动/配置/日志路径后：打包版边界冒烟
+python _tools/verify/code_regression.py          # 1. Run after any code change (344 checks)
+python _tools/verify/i18n_check.py               # 1b. After touching strings/features: language-pack and "no hardcoded strings" gate (35 checks)
+python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (116 checks, no game launched)
+python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/languages: really build windows and switch language (29 checks)
+python _tools/verify/selfupdate_check.py         # 3. After touching self-update: offline check/swap/rollback run (92 checks)
+python _tools/recycle.py dist/Mindustry启动器     # 4. ★ Clear build output before packaging
+python _tools/build.py --deploy                  # 5. Build + sync to the deploy directory
+python _tools/verify/packed_code_check.py        # 6. Confirm the new code really made it into the exe
+python _tools/verify/exe_edge_check.py           # 7. After touching startup/config/log paths: packaged-build edge-case smoke test
 ```
 
-- **第 4 步不能省**：PyInstaller 建 COLLECT 前会先清空 `dist/Mindustry启动器`
-  （1000+ 个文件），会撞上工具的「批量删除确认闸」（单轮累计 ≥ 50 个文件就要人工确认），
-  构建**直接失败**。`recycle.py` 走 `SHFileOperationW` 原生 API，不受闸管、而且真进回收站。
-- **第 6 步不能省**：源码改了没打进包、或 spec 漏了模块时，exe 照常启动、界面照常出现、
-  什么都不报错，只是跑的是旧逻辑 —— 光看「能打开」发现不了。
-- 部署是**增量**的：`_internal/` 有近千个文件，整目录重抄又慢又会撞删除闸，所以只复制
-  真正不同的。`--deploy-to <目录>` 可指定目标，`--prune` 才会删掉目标里多出来的陈旧文件。
-- 每个脚本干什么、什么时候跑，见 `_tools/README.md`。
+- **Step 4 is not optional.** Before COLLECT, PyInstaller empties `dist/Mindustry启动器`
+  (1000+ files), which trips the tooling's "bulk delete confirmation gate" (≥ 50 files in a
+  single round requires manual confirmation) and the build **fails outright**. `recycle.py`
+  goes through the native `SHFileOperationW` API, so it bypasses the gate — and files really
+  do land in the recycle bin.
+- **Step 6 is not optional.** If source changed but did not make it into the package, or the
+  spec missed a module, the exe still starts, the window still appears, and nothing is
+  reported — it just runs the old logic. "It opens" proves nothing.
+- Deployment is **incremental**: `_internal/` holds close to a thousand files, so recopying
+  the whole directory is slow and trips the delete gate. Only genuinely differing files are
+  copied. `--deploy-to <dir>` picks a target; `--prune` additionally removes stale files.
+- For what each script does and when to run it, see `_tools/README.md`.
 
-## 构建与交付
+## Building and delivering
 
-| 交付物 | 命令 | 体积 | 给谁 |
+| Artifact | Command | Size | For whom |
 |---|---|---|---|
-| **源码包** | `python _tools/make_source_zip.py` | ~360 KB | 想自己构建、看代码的人 |
-| **发布包** | `python _tools/make_release_zip.py` | ~31 MB | 只想双击用的人（不需要 Python / Java） |
-| **更新包** | 上一条命令顺带生成 | ~2 MB | **已装旧版的人** —— 启动器自更新时下它 |
+| **Source zip** | `python _tools/make_source_zip.py` | ~360 KB | People who want to build it or read the code |
+| **Release zip** | `python _tools/make_release_zip.py` | ~31 MB | People who just want to double-click (no Python / Java needed) |
+| **Update zip** | produced by the command above | ~2 MB | **People on an older version** — the launcher downloads it during self-update |
 
-发布包 = exe + `_internal/` + 内置 `jre/` + `使用说明.txt` + `LICENSE` + 程序文件清单
-`manifest.json`，解压即用。
+A release zip = exe + `_internal/` + bundled `jre/` + `使用说明.txt` + `LICENSE` + a program
+file manifest (`manifest.json`). Extract and run.
 
-发一次版是**两个资产**：完整包给新用户，更新包给老用户。更新包只装相对上一版
-**真正变动的文件**（exe 几乎每次都变；`_internal/` 只在改依赖 / Python / PyInstaller
-版本时才变），差异靠上一版随包发出的 `manifest.json` 算 —— 所以**每个完整包里都带
-一份**，同时本地留档在 `_history/releases/manifest-<版本>.json`。
+Publishing a release means **two assets**: the full package for new users, the update package
+for existing ones. The update package carries only the files that **actually changed** relative
+to the previous version (the exe changes almost every time; `_internal/` changes only when
+dependencies, Python, or PyInstaller change). The diff is computed from the `manifest.json`
+shipped inside the previous release — which is why **every full package carries one**, with a
+local copy kept at `_history/releases/manifest-<version>.json`.
 
 ```bash
-# 常规发版：基线自动从留档里挑「版本号更小、且最大」的那份
+# Normal release: the baseline is auto-picked as the highest recorded version below the current one
 python _tools/make_release_zip.py
 
-# 上一版没带 manifest.json（1.0.0 就是，那时还没有自更新）→ 量它的发布包反推
-python _tools/make_release_zip.py --baseline-from-zip 上一版的发布包.zip --baseline-version 1.0.0
+# Previous version shipped no manifest.json (1.0.0 did not — self-update did not exist yet)
+# → measure its release package instead
+python _tools/make_release_zip.py --baseline-from-zip previous-release.zip --baseline-version 1.0.0
 
-python _tools/make_release_zip.py --no-update     # 只出完整包
+python _tools/make_release_zip.py --no-update     # full package only
 ```
 
-⚠️ 拿不到基线时会**退化成全量更新包**（十几 MB）——大一点，但绝不会漏换文件。
-发出去之前跑一次验收：
+⚠️ With no baseline it **degrades to a full update package** (tens of MB) — bigger, but it can
+never miss a file. Run the acceptance check before shipping:
 
 ```bash
 python _tools/verify/release_check.py
 ```
 
-它会解压到**全新空目录**、用**完全无关的 cwd** 真启动一次，断言关键依赖齐全、
-数据落在 exe 旁边（⚠️ 会弹 GUI 窗口约 10 秒）。光看 zip 的文件清单证明不了
-「到别人机器上真能跑」，必须实跑。
+It extracts into a **pristine empty directory**, launches from a **completely unrelated cwd**,
+and asserts that key dependencies are present and that data lands next to the exe
+(⚠️ it pops a GUI window for about 10 seconds). Reading the zip's file list cannot prove
+"this really runs on someone else's machine" — only an actual launch can.
 
-## 配置与扩展
+## Configuration and extension
 
-**`config.json` 是唯一的配置文件**，首次运行时自动生成在 exe 旁边。完整的结构、
-默认值与容错规则见 `launcher/config.py`；与「发版以后还能读懂老配置」有关的三条约定：
+**`config.json` is the only config file**, auto-created next to the exe on first run. The full
+structure, defaults, and fault-tolerance rules live in `launcher/config.py`. Three conventions
+that decide whether a future release can still read an old config:
 
-- **`config_version` 是配置的格式版本**，跟应用版本号不是一回事。只是**新增**一个带默认
-  值的键 → 不用管它；**改名 / 改含义 / 删键 / 换类型** → `version.py` 的 `CONFIG_VERSION`
-  +1，并在 `config.py` 的 `MIGRATIONS` 里补一条从旧版本到新版本的迁移函数（逐级走，
-  不猜不跳级）。
-- **未知键原样保留**（向前兼容）：本版本读不懂的键在存盘时会写回，不会因为「我读不懂」
-  就被删掉。
-- **开关型的键只认 `true`/`false`**（数字 `0`/`1` 也认）：`bool("false")` 在 Python 里是
-  `True`，写成字符串会把开关**反过来**。写成别的值一律退回默认 + 一条 WARNING。
-- **枚举型的键**（如 `launcher_update` = `auto`/`check`/`off`，`language` = `auto`/`zh_CN`/`en_US`）
-  写成认不出的值同样退回默认 + WARNING，并且 WARNING 里会**点名是哪个键** ——
-  用户要拿这句话去 `config.json` 里找。
+- **`config_version` is the format version of the config**, not the app version. Merely
+  **adding** a key with a default → do nothing. **Renaming / changing meaning / deleting a key /
+  changing a type** → bump `CONFIG_VERSION` in `version.py` and add a migration function from
+  the old version to the new one in `config.py`'s `MIGRATIONS` (step by step, no guessing, no
+  skipping levels).
+- **Unknown keys are preserved verbatim** (forward compatibility): keys this version does not
+  understand are written back on save, not dropped just because "I don't understand them".
+- **Boolean keys accept only `true`/`false`** (and the numbers `0`/`1`): `bool("false")` is
+  `True` in Python, so a string would **invert** the switch. Any other value falls back to the
+  default plus a WARNING.
+- **Enum keys** (e.g. `launcher_update` = `auto`/`check`/`off`, `language` = `auto`/`zh_CN`/`en_US`)
+  likewise fall back to the default plus a WARNING, and the WARNING **names the key** — the user
+  needs that to find it in `config.json`.
 
-另外两个「不动本体就能扩展」的口子：
+Two other hatches for extending without touching the app itself:
 
-| 想做什么 | 写在哪儿 | 说明 |
+| Goal | Where | Notes |
 |---|---|---|
-| 加一个**游戏版本来源** | `config.json` 的 `version_sources` 数组 | 内置 `Anuken/Mindustry`、`TinyLake/MindustryX`；同名即覆盖内置项，不改代码也不重新打包。字段含义见 `launcher/sources.py` |
-| 加一点**自己的功能** | 部署目录下的 `extensions/*.py` | 四个钩子：`on_config_loaded` / `on_versions_refreshed` / `on_before_launch` / `on_game_exited`。钩子名发布后**只增不改**，详见 `launcher/extensions.py` |
+| Add a **game version source** | the `version_sources` array in `config.json` | Bundled: `Anuken/Mindustry`, `TinyLake/MindustryX`. Same name overrides a built-in — no code change, no repackaging. Field meanings in `launcher/sources.py` |
+| Add **your own feature** | `extensions/*.py` under the deploy directory | Four hooks: `on_config_loaded` / `on_versions_refreshed` / `on_before_launch` / `on_game_exited`. Hook names are **append-only** after release; see `launcher/extensions.py` |
 
-⚠️ 扩展里的代码跟启动器**同权限**运行，只放自己写的或信得过的文件。
-设 `MDT_NO_EXTENSIONS=1` 可整体停用。
+⚠️ Extension code runs with the **same privileges** as the launcher — only use files you wrote
+or trust. Set `MDT_NO_EXTENSIONS=1` to disable extensions entirely.
 
-## 界面语言
+## UI language
 
-界面文案全部放在 `lang/*.json` 里，代码只写 key（`t("settings.save_return")`）。
-设置页的「界面语言」有 `auto`（跟随系统界面语言）、`简体中文`、`English` 三档。
-2026-10-05 起**全部模块（21 个源文件）已迁完，355 条 key**，门禁是条硬线：
-代码里再写死一条界面文案就当场报错。
+All UI strings live in `lang/*.json`; the code only contains keys
+(`t("settings.save_return")`). The "Interface language" setting offers three choices: `auto`
+(follow the system UI language), `简体中文`, and `English`. As of 2026-10-05 **every module
+(21 source files) has been migrated — 355 keys** — and the gate is a hard line: hardcoding one
+more UI string fails the build check on the spot.
 
-- **`zh_CN.json` 是基准包**：新增文案先写它，再补别的语言。两份文件的 key 集合与
-  `{占位符}` 必须**完全一致** —— 占位符少一个是运行时才发现的，所以由
-  `_tools/verify/i18n_check.py` 静态盯着。
-- **换语言是「重建两页」**，不是逐条改文案：文案在建控件那一刻就取好了，不是引用。
-  逐个 `configure(text=...)` 去追必然漏，而漏了不会有任何机制报警。重建（几十毫秒）
-  是唯一不会漏的做法，时机只有设置页那个唯一出口「保存并返回」。
-- **找不到文案不会崩**：回退链 `当前语言 → zh_CN → 直接显示 key`，另加一条 WARNING。
-  界面上出现 `settings.save_return` 这种字样，就是有人漏了 key（比空白好定位）。
-- **语言包可以外部覆盖**：走 `resource_path()`，**exe 旁边的 `lang/` 优先于包内**
-  （`_internal/lang/`）。所以想改翻译、或者加一门新语言，放一份同名 JSON 到 exe 旁边即可，
-  **不必重新打包**（和 `jre/` 一个路子）。
-- **`MDT_LANG` 可以把语言钉死**（如 `MDT_LANG=en_US`）：这是给验证脚本用的解耦开关 ——
-  否则「用户把界面切成英文」会让一堆比中文文案的断言变红，而那**不是回归**。
-  钉死之后 `config.json` 里的值就管不着它了。（拿它验「切换本身」的脚本反过来要
-  **清掉**它，否则测不到用户改语言。`code_regression` / `gui_smoke` / `exe_edge_check`
-  / `e2e_launcher` 钉死；只有 `i18n_switch_smoke` 清掉。）
-- **什么不翻译**：日志一律保持中文（`logger.*`、`_add` 里的原样留着 —— 日志要能在任何
-  语言下被搜到、被贴进 issue）。同理：语言名自己（`简体中文` / `English`）、内部标识
-  （`APP_NAME`）、**写进 `config.json` 当数据用的名字**（默认分类名）、`what=` 诊断标签
-  （用户要拿它去 config.json 里找键名）。这些在代码里用 **`# i18n: keep`** 标出来
-  （标在行尾，或上方紧邻的纯注释块里），并在旁边写清为什么。判据只有一句：
-  **用户有可能在界面上读到它吗？**
+- **`zh_CN.json` is the reference pack**: add new strings there first, then fill in other
+  languages. The key sets and `{placeholders}` of the two files must match **exactly** — a
+  missing placeholder only shows up at runtime, so `_tools/verify/i18n_check.py` watches it
+  statically.
+- **Switching language rebuilds the two pages** rather than relabelling widget by widget:
+  strings are resolved when the widget is built, not referenced later. Chasing every widget
+  with `configure(text=...)` is guaranteed to miss something, and a miss triggers no alarm.
+  Rebuilding (tens of milliseconds) is the only approach that cannot miss; the only moment it
+  happens is the settings page's single exit, "Save and return".
+- **A missing string never crashes**: the fallback chain is
+  `current language → zh_CN → show the key itself`, plus a WARNING. Seeing something like
+  `settings.save_return` in the UI means someone missed a key (far easier to locate than a
+  blank).
+- **Language packs can be overridden externally**: lookup goes through `resource_path()`, and
+  a `lang/` folder **next to the exe takes priority over the one inside the package**
+  (`_internal/lang/`). So to fix a translation or add a language, drop a JSON of the same name
+  next to the exe — **no repackaging needed** (same mechanism as `jre/`).
+- **`MDT_LANG` pins the language** (e.g. `MDT_LANG=en_US`). This is a decoupling switch for
+  verification scripts — otherwise "the user switched the UI to English" turns a pile of
+  assertions that compare Chinese strings red, and that **is not a regression**. Once pinned,
+  the value in `config.json` no longer applies. (Scripts that verify the *switching itself*
+  must conversely **clear** it, or they cannot exercise a user changing the language.
+  `code_regression` / `gui_smoke` / `exe_edge_check` / `e2e_launcher` pin it;
+  only `i18n_switch_smoke` clears it.)
+- **What stays untranslated**: logs are always Chinese (`logger.*`, and content passed to
+  `_add` is left as-is — logs must be greppable and pasteable into an issue under any
+  language). Same for the language names themselves (`简体中文` / `English`), internal
+  identifiers (`APP_NAME`), **names written into `config.json` as data** (the default profile
+  name), and `what=` diagnostic labels (users need them to locate a key in config.json). These
+  are marked in the code with **`# i18n: keep`** (at end of line, or in an immediately
+  preceding pure-comment block), with the reason written next to it. The single test is:
+  **could a user ever read this in the UI?**
 
-加一门语言：在 `launcher/utils.py` 的 `LANGUAGES` 里加一行 `(code, 自称的名字)`，
-再补一份 `lang/<code>.json`。
+To add a language: add one line `(code, native_name)` to `LANGUAGES` in `launcher/utils.py`,
+then supply a `lang/<code>.json`.
 
-## 启动器自更新
+## Launcher self-update
 
-启动器会检查自己的新版本，并在退出时把程序文件换成新版。几个不走寻常路的决定：
+The launcher checks for its own new version and swaps the program files on exit. A few
+decisions that go against the grain:
 
-- **只换程序文件**：exe + `_internal/`。`jre/`、`config.json`、`versions/`、
-  `Backups/`、`logs/`、`extensions/` 一律不碰 —— 这是「向上兼容」的延伸：升级启动器
-  不该动到用户的任何数据。
-- **Windows 不允许覆盖运行中的 exe**，所以替换发生在**启动器退出之后**：退出前把 exe
-  复制到 `%TEMP%`，用它以 `--apply-update <计划文件>` 二次启动，等旧进程真的结束再从
-  外部替换。（刻意不用 `.cmd` 批处理：中文路径在批处理里的编码太容易翻车。）
-- **替换顺序先 `_internal/` 后 exe**：万一中途挂了，最坏是「旧 exe + 新运行时」，
-  比「新 exe + 旧运行时」好收拾。任何一步失败都回滚成原样，并记一笔到 `launcher.log`。
-- **严格大于才动作**：远程版本等于本地 → 什么都不做；小于本地 → 绝不降级
-  （开发机上自编的版本常常比 Release 新，这是最后一道闸）。
-- **更新包是网络来的**，所以只认 `_internal/` 前缀和 exe 自己，逐文件比对 sha256；
-  包不完整、格式不符、路径越界一律**整份丢掉** —— 半份更新计划比没有计划危险得多。
-- **三档开关**（设置页「启动器更新」）：`auto` = 后台下好、退出时换上；`check` = 只提示；
-  `off` = 停用。源码运行、以及 `MDT_NO_SELFUPDATE=1`，一律停用。
-- **查新版的地址可以覆盖**：环境变量 `MDT_SELFUPDATE_API`（只认 `http(s)://`）。两个用处：
-  ① 端到端验证时指向一个本地假接口，把「查新版 → 下载 → 换文件 → 重启」整条链真跑一遍；
-  ② `api.github.com` 连不上时指向自己的代理。下载地址由接口返回内容决定，所以它也能一起改。
+- **Only program files are replaced**: the exe and `_internal/`. `jre/`, `config.json`,
+  `versions/`, `Backups/`, `logs/`, and `extensions/` are never touched — an extension of
+  "upward compatibility": upgrading the launcher must not disturb any user data.
+- **Windows will not let you overwrite a running exe**, so the swap happens **after the launcher
+  exits**: before exiting, the exe is copied to `%TEMP%` and relaunched with
+  `--apply-update <plan file>`; once the old process is truly gone, it replaces the files from
+  outside. (Deliberately not a `.cmd` batch file: non-ASCII paths in batch files are far too
+  easy to get wrong.)
+- **`_internal/` is replaced before the exe**: if it dies halfway, the worst case is
+  "old exe + new runtime", which is easier to recover from than "new exe + old runtime". Any
+  failed step rolls back to the original and records a line in `launcher.log`.
+- **Strictly greater, or nothing happens**: a remote version equal to the local one → do
+  nothing; lower → never downgrade (locally built versions on a dev machine are often newer
+  than a Release — this is the last gate).
+- **The update package arrives over the network**, so it only accepts the `_internal/` prefix
+  and the exe itself, and compares sha256 per file; an incomplete package, a format mismatch,
+  or a path escape causes the **whole thing to be discarded** — half an update plan is far more
+  dangerous than none.
+- **Three modes** (the "Launcher update" setting): `auto` = download in the background and swap
+  on exit; `check` = only notify; `off` = disabled. Running from source, and
+  `MDT_NO_SELFUPDATE=1`, always disable it.
+- **The update endpoint can be overridden**: the `MDT_SELFUPDATE_API` environment variable
+  (`http(s)://` only). Two uses: ① point it at a local fake endpoint during end-to-end
+  verification to exercise the entire "check → download → swap files → restart" chain for
+  real; ② point it at your own proxy when `api.github.com` is unreachable. The download URL
+  comes from the endpoint's response, so it is redirected too.
 
-## 设计要点
+## Design notes
 
-- **数据根 vs 资源根**：`BASE_DIR`（exe 所在目录）与 `RESOURCE_DIR`（`sys._MEIPASS`）
-  是分开的，资源一律走 `resource_path()` —— 先看 exe 旁边的外部副本，再回退包内。
-  所以换个 `jre/` 不用重新打包。
-- **写文件一律 `atomic_write_text()`**（Windows 上 `os.replace` 报 WinError 5 多半是目标
-  被占用，靠模块级锁 + 重试 + 兜底覆盖解决）。
-- **删数据默认走回收站**：统一入口 `delete_path()` → `SHFileOperationW` + `FOF_ALLOWUNDO`，
-  绝不 `shutil.rmtree`。
-- **版本号只有一处**（`launcher/version.py`）：日志、窗口标题、`User-Agent` 都引用它，
-  避免出现「日志说 1.0.1、界面写着 1.0.0」。
-- **启动预热**：窗口一能用来就在后台把当前版本的游戏文件拼好，点启动直接复用。
+- **Data root vs. resource root**: `BASE_DIR` (the directory holding the exe) and
+  `RESOURCE_DIR` (`sys._MEIPASS`) are separate; resources always go through `resource_path()`
+  — first an external copy next to the exe, then a fallback inside the package. That is why
+  swapping `jre/` needs no repackaging.
+- **All writes go through `atomic_write_text()`** (on Windows, a WinError 5 from `os.replace`
+  usually means the target is locked; handled with a module-level lock plus retries and a
+  last-resort overwrite).
+- **Deleting data goes to the recycle bin by default**: the single entry point is
+  `delete_path()` → `SHFileOperationW` + `FOF_ALLOWUNDO`, never `shutil.rmtree`.
+- **The version number exists in exactly one place** (`launcher/version.py`): logs, the window
+  title, and the `User-Agent` all reference it, so "the log says 1.0.1 while the UI says 1.0.0"
+  cannot happen.
+- **Launch pre-warming**: as soon as the window is usable, the game files for the current
+  version are assembled in the background, so clicking Launch reuses them.
 
-## 许可证
+## License
 
-本项目以 **GNU General Public License v3.0** 发布，全文见 [LICENSE](LICENSE)。
+This project is released under the **GNU General Public License v3.0**; see [LICENSE](LICENSE)
+for the full text.
 
-Mindustry 游戏本体**不在本仓库内**，版权归其作者所有，遵循游戏自身的许可协议。
-本程序不修改、也不再分发游戏本体 —— 它只是从官方发布页下载可执行文件、启动一个
-独立进程。协议的选择是独立的：GPL 的传染性只作用于「派生作品」，而通过命令行调用
-另一个独立程序不构成派生。
+The Mindustry game itself is **not** in this repository; its copyright belongs to its authors
+and it is governed by its own license. This program neither modifies nor redistributes the
+game — it merely downloads the executable from the official release page and launches it as a
+separate process. The license choice is independent: GPL's copyleft applies only to
+"derivative works", and invoking another independent program via the command line does not
+create one.

@@ -14,10 +14,11 @@
 包含：
     Mindustry启动器/
         Mindustry启动器.exe     程序本体
-        _internal/              PyInstaller 运行时（993 个文件）
+        _internal/              PyInstaller 运行时（近千个文件）
         jre/                    内置 Java（Temurin 25，95 个文件）
-        Mindustry.json          启动配置（VM 参数，可改）
-        使用说明.txt            面向使用者的说明
+        LICENSE                 许可协议全文
+        使用说明.txt            面向使用者的说明（本脚本现生成）
+        manifest.json           程序文件清单 —— 下一版算更新包差异的基线
 
 不含（刻意排除）：
     launcher/、_tools/          源码与开发脚本

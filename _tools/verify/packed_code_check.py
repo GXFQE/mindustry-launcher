@@ -13,11 +13,22 @@ exe 能正常启动、看起来一切正常，只是跑的是旧逻辑 —— �
 （注意：新 exe 和已部署的那份可能是同一个文件——打完记得先覆盖再验。）
 
 做法：CArchiveReader 取出 PYZ 归档 → 逐模块解出 code object →
-递归遍历所有嵌套函数的 co_names，断言所需符号都在。
+递归遍历所有嵌套函数的 co_names，断言所需符号都在；
+**再把 `launcher.version` 真执行一遍**，断言里面的版本值跟源码一致
+（符号在不在是一回事，值对不对是另一回事，见 `check_version_values`）。
 """
 import sys
 import tempfile
 from pathlib import Path
+
+# 要核对「值」而不是「名字」的模块：包内 code object 执行结果 vs 源码 import 结果。
+# 键 = 模块名，值 = 要比对的属性名。
+VALUE_MODULES = {
+    "launcher.version": (
+        "APP_NAME", "APP_ID", "__version__", "USER_AGENT",
+        "CONFIG_VERSION", "MANIFEST_VERSION", "MIN_PYTHON",
+    ),
+}
 
 def _find_project_root(start: Path) -> Path:
     """往上找项目根（含 launcher/ 包的那一层）。脚本放在 _tools/ 下也照样对。"""
@@ -278,6 +289,55 @@ def find_exe(argv):
     )
 
 
+def check_version_values(zarc) -> list[str]:
+    """把包里的 `launcher.version` **真执行一遍**，断言值 == 源码里的值。
+
+    ★ 为什么光查符号不够：符号检查只能证明「包里有个叫 `__version__` 的东西」，
+    证明不了「它等于几」。「改了版本号但忘了重打」或者「部署时覆盖失败」时，
+    exe 会**带着上一版的版本号**照常启动 —— 表面上一切正常，但
+    `USER_AGENT` 会拿旧版本号去请求 GitHub、`full_version()` 会记错的版本、
+    发版时清单文件名也跟着错。这类退化只有当有人去比对值的时候才看得见。
+    所以这里不查名字，直接比。
+
+    做法：从 PYZ 解出模块级 code object → 在一个干净命名空间里 exec →
+    读值；再 `import launcher.version` 拿源码里的值；两边逐个比对。
+    这两个模块**不 import 任何东西**（`launcher/version.py` 的 docstring 里有
+    这条约定），所以 exec 不会因为缺依赖而失败。
+    """
+    import importlib
+
+    bad: list[str] = []
+    for module, attrs in VALUE_MODULES.items():
+        if module not in zarc.toc:
+            bad.append(f"{module} 整个模块不在包里（值无从核对）")
+            print(f"  [FAIL] {module} 不在包里，无法核对版本值")
+            continue
+        try:
+            code = zarc.extract(module)
+            ns: dict = {"__name__": module}
+            exec(code, ns)                       # noqa: S102 —— 核对的就是它
+        except Exception as e:                   # noqa: BLE001
+            bad.append(f"{module} 解出来的 code 执行失败: {e!r}")
+            print(f"  [FAIL] {module} 执行失败: {e!r}")
+            continue
+
+        src = importlib.import_module(module)
+        mismatched = []
+        for attr in attrs:
+            want = getattr(src, attr, "<源码里没有这个属性>")
+            got = ns.get(attr, "<包里没有这个属性>")
+            if got != want:
+                mismatched.append(f"{attr}: 包里={got!r} 源码={want!r}")
+        if mismatched:
+            bad.extend(mismatched)
+            for line in mismatched:
+                print(f"  [FAIL] {module} 值不一致 -> {line}")
+        else:
+            print(f"  [OK  ] {module}  版本值 {len(attrs)} 项与源码一致"
+                  f"（__version__={ns.get('__version__')!r}）")
+    return bad
+
+
 def main():
     exe = find_exe(sys.argv)
     print(f"检查 {exe}  ({exe.stat().st_size / 1024 / 1024:.2f} MB)")
@@ -314,6 +374,9 @@ def main():
                 print(f"  [FAIL] {module} 缺: {missing}")
             else:
                 print(f"  [OK  ] {module}  {len(symbols)} 个符号全部命中")
+
+        print()
+        fail.extend(check_version_values(zarc))
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -323,7 +386,7 @@ def main():
         for f in fail:
             print("  -", f)
         return 1
-    print("通过：新代码确实在 exe 里")
+    print("通过：新代码确实在 exe 里，版本值也对得上")
     return 0
 
 

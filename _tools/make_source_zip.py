@@ -2,8 +2,13 @@
 """生成「可独立构建」的源码包 zip。
 
 用法（在项目根执行）：
-    python _tools/make_source_zip.py                    # 自动命名（带日期）
+    python _tools/make_source_zip.py                    # 自动命名（带日期），落在项目根
     python _tools/make_source_zip.py -o 我的名字.zip     # 指定输出名
+    python _tools/make_source_zip.py --outdir _history/releases
+
+⚠️ **默认落在项目根**（历史行为，改不了会破坏别人的脚本）；但项目根的规矩是
+「只放程序 + README + LICENSE」，所以交付时请显式加 ``--outdir`` ——
+压好的包归 ``_history/releases/``，别让它躺在仓库根等着被提交。
 
 只收**构建一个 exe 真正需要的**东西：源码 + spec + 构建资源 + 开发工具。
 不收用户数据、构建产物、jre、运行时文件 —— 那些要么可重建、要么体积巨大、
@@ -63,12 +68,22 @@ def _iter_files(src: Path):
 def main() -> int:
     ap = argparse.ArgumentParser(description="生成可独立构建的源码包 zip")
     ap.add_argument("-o", "--output", help="输出文件名（默认带日期）")
+    ap.add_argument(
+        "--outdir",
+        default=None,
+        help="输出目录（默认项目根）。交付时用 --outdir _history/releases",
+    )
     args = ap.parse_args()
 
     name = args.output or DEFAULT_NAME.format(
         date=_dt.date.today().isoformat()
     )
-    out_zip = ROOT / name
+    # --output 给绝对路径时 Path 的拼接规则会让它直接生效（第二个操作数是绝对路径），
+    # 所以这里不用再单独判一次绝对/相对。
+    out_dir = Path(args.outdir).expanduser() if args.outdir else ROOT
+    out_zip = out_dir / name
+    # 目标目录不存在就建（--outdir 常指向 _history/releases，第一次跑时还没有）
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     collected: list[tuple[Path, str]] = []
     for rel in ITEMS:

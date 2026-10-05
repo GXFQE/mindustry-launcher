@@ -65,7 +65,7 @@ python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
 python _tools/build.py --deploy                  # 5. 构建 + 同步到部署目录
-python _tools/verify/packed_code_check.py        # 6. 确认新代码真进了 exe
+python _tools/verify/packed_code_check.py        # 6. 确认新代码真进了 exe，且版本号对得上
 python _tools/verify/exe_edge_check.py           # 7. 改了启动/配置/日志路径后：打包版边界冒烟
 ```
 
@@ -73,7 +73,9 @@ python _tools/verify/exe_edge_check.py           # 7. 改了启动/配置/日志
   （1000+ 个文件），会撞上工具的「批量删除确认闸」（单轮累计 ≥ 50 个文件就要人工确认），
   构建**直接失败**。`recycle.py` 走 `SHFileOperationW` 原生 API，不受闸管、而且真进回收站。
 - **第 6 步不能省**：源码改了没打进包、或 spec 漏了模块时，exe 照常启动、界面照常出现、
-  什么都不报错，只是跑的是旧逻辑 —— 光看「能打开」发现不了。
+  什么都不报错，只是跑的是旧逻辑 —— 光看「能打开」发现不了。它还顺带**把 `launcher.version`
+  真执行一遍**、断言版本值等于源码里的（只查符号证明不了「版本号是几」：忘了重打时
+  exe 会带着上一版号照常启动，`USER_AGENT` 和发版清单跟着错）。
 - 部署是**增量**的：`_internal/` 有近千个文件，整目录重抄又慢又会撞删除闸，所以只复制
   真正不同的。`--deploy-to <目录>` 可指定目标，`--prune` 才会删掉目标里多出来的陈旧文件。
 - 每个脚本干什么、什么时候跑，见 `_tools/README.md`。
@@ -82,7 +84,7 @@ python _tools/verify/exe_edge_check.py           # 7. 改了启动/配置/日志
 
 | 交付物 | 命令 | 体积 | 给谁 |
 |---|---|---|---|
-| **源码包** | `python _tools/make_source_zip.py` | ~360 KB | 想自己构建、看代码的人 |
+| **源码包** | `python _tools/make_source_zip.py --outdir _history/releases` | ~360 KB | 想自己构建、看代码的人 |
 | **发布包** | `python _tools/make_release_zip.py` | ~31 MB | 只想双击用的人（不需要 Python / Java） |
 | **更新包** | 上一条命令顺带生成 | ~2 MB | **已装旧版的人** —— 启动器自更新时下它 |
 
@@ -105,15 +107,21 @@ python _tools/make_release_zip.py --no-update     # 只出完整包
 ```
 
 ⚠️ 拿不到基线时会**退化成全量更新包**（十几 MB）——大一点，但绝不会漏换文件。
-发出去之前跑一次验收：
+发出去之前跑**两个**验收，分工不同、都要跑：
 
 ```bash
-python _tools/verify/release_check.py
+python _tools/verify/release_upgrade_check.py   # 升级路径对账（秒级，不解压）
+python _tools/verify/release_check.py           # 解压即用（会弹 GUI 窗口约 10 秒）
 ```
 
-它会解压到**全新空目录**、用**完全无关的 cwd** 真启动一次，断言关键依赖齐全、
-数据落在 exe 旁边（⚠️ 会弹 GUI 窗口约 10 秒）。光看 zip 的文件清单证明不了
-「到别人机器上真能跑」，必须实跑。
+- `release_upgrade_check.py` 把留档里那三个资产（老完整包 / 真更新包 / 新完整包）
+  摆在一起走四步证明链：老包真实哈希 == 老清单 → 新包同上 → 更新包 payload 哈希与集合
+  都等于声明 → **把更新套在老清单上逐条等于新清单**。另加两条防呆：每个路径都要过
+  `selfupdate._is_replaceable`（想碰 `jre/` 或用户数据当场红）、完整包里不许夹带用户数据。
+  它证明「**老用户能升上来**」——这正是更新包最容易翻车、而单测又照不到的地方。
+- `release_check.py` 解压到**全新空目录**、用**完全无关的 cwd** 真启动一次，断言关键依赖齐全、
+  数据落在 exe 旁边。它证明「**这个 zip 到别人机器上真能跑**」。光看 zip 的文件清单
+  证明不了这两件事中的任何一件，必须实跑。
 
 ## 配置内部约定
 

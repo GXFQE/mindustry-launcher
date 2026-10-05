@@ -90,6 +90,11 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 |---|---|
 | `python _tools/make_source_zip.py` | 生成 `Mindustry启动器_源码包_<日期>.zip` |
 | `python _tools/make_source_zip.py -o 名字.zip` | 指定输出名 |
+| `python _tools/make_source_zip.py --outdir _history/releases` | **交付时用这个** —— 指定输出目录（默认项目根） |
+
+⚠️ **默认落在项目根**（历史行为，改成别的会破坏别人的脚本）。但项目根的规矩是
+「只放程序 + README + LICENSE」，所以交付时**显式加 `--outdir _history/releases`** ——
+不然压好的包就躺在仓库根等着被误提交。`--outdir` 指向的目录不存在会自动建。
 
 打出一个约 360 KB 的 zip，解压后在根目录跑 `python _tools/build.py`
 就能构建，**不需要项目里的任何其它文件**。
@@ -193,8 +198,9 @@ powershell -c "Get-CimInstance Win32_Process | ? { \$_.ExecutablePath -like '*<�
 | `i18n_switch_smoke.py` | **换语言冒烟，29 项，真建窗口切一次语言**：起点固定（沙箱 config 写 `zh_CN`，不看系统语言）→ 下拉框切英文 → `save_and_return` → 断言 config 里存的是**契约值 `en_US`**（不是界面文案 `English`）、窗口标题跟着变、**中文控件真的被销毁**（老控件 `winfo_exists()` 归零，证明是重建而不是叠一层）、重建后存档分类/路径数据灌了回来、状态栏那句提示用的是新语言、再切回中文这条路也通、缺 key 时原样返回不抛异常、认不出的语言 code 退回默认。★ 它**故意清掉 `MDT_LANG`** —— 钉死了就测不到「语言能被用户改」这件事，所以必须和 `gui_smoke.py` 分开 | 改了文案、语言包、`i18n.py`、或设置页的语言那一项之后 |
 | `selfupdate_check.py` | **启动器自更新，92 项，不联网不建窗口**：版本比较必须「严格大于」才动（相等不下、更小绝不降级）；更新包的安全解析（路径穿越 / 越权改 `config.json`·`jre` / 格式不符 / 缺 sha → 整份丢掉）；解包后的逐文件 sha256 校验；**真跑一遍 `apply_update_main`**（替换顺序先 `_internal` 后 exe、失败真的回滚、**用户数据反向对照：`versions/` 一个字节没动**）；三档开关与硬停用条件；**从上一版发布包反推基线**（削掉 zip 内一级目录名、只收 exe 与 `_internal/`）；**查新版地址可被 `MDT_SELFUPDATE_API` 覆盖**（端到端验证拿它指假接口）；**执行体的运行时联接**（onedir 的 exe 离了同目录 `_internal/` 连启动都做不到 —— 要建目录联接指回程序目录、重复调用幂等、目标没了要**摘掉断链重建**、摘/建都不许动被指向的那份） | 改了 `launcher/selfupdate.py`、`MindustryLauncher.py` 的 `--apply-update` 分支、或 `make_release_zip.py` 的清单部分 |
 | `selfupdate_e2e.py` | **自更新全链路真机验证**：起真 exe → 关窗 → 等执行体替换 → 重开核对版本；新版从**本地假 HTTP 接口**给（`MDT_SELFUPDATE_API` 指过去），更新包用真发布脚本现造；用户数据放哨兵字节比对，确认替换没碰 `versions/` | 改了自更新、`--apply-update`、或交付包清单之后（`selfupdate_check.py` 是进程内、覆盖不到 onedir 运行时这层） |
-| `packed_code_check.py` | 解出 exe 内部 PYZ、递归收 `co_names`，断言新符号真进了打包产物 | **每次重打完 exe**（"能打开"证明不了包里是新代码） |
+| `packed_code_check.py` | 解出 exe 内部 PYZ、递归收 `co_names`，断言新符号真进了打包产物；**再把 `launcher.version` 真执行一遍**，断言 `__version__` / `USER_AGENT` / `APP_ID` / `CONFIG_VERSION` / `MANIFEST_VERSION` 等 **7 项「值」与源码一致**。★ 符号在不在是一回事、值对不对是另一回事：忘了重打或部署没覆盖上时，exe 会**带着上一版版本号**照常启动（`USER_AGENT` 拿旧号去请求 GitHub、发版清单文件名跟着错），光查符号看不出来 | **每次重打完 exe**（"能打开"证明不了包里是新代码，也证明不了版本号是对的） |
 | `release_check.py` | 解压发布包到空目录、预置最新版本清单、**用不相关的 cwd 真启动一次**，断言关键依赖齐全、cwd 没被污染、数据落在 exe 旁边 | **每次发发布包**（⚠️ 会真弹 GUI 窗口约 10 秒） |
+| `release_upgrade_check.py` | **真发布资产的升级仿真**（不联网、不起进程、**不解压**）：拿留档里的**老完整包 + 真更新包 + 新完整包**三方对账，走四步证明链 —— ① 老完整包的真实条目哈希 == 老 `manifest.json` 声明（基线没说谎）② 新完整包同上 ③ 更新包 payload 的真实哈希 == `update.json` 声明，且 payload 集合与声明**完全一致**（不多带）④ **把更新套在老清单上，结果逐条 == 新清单**（这才是"升级 == 重装"）。另加两条防呆：每个路径都要过 `selfupdate._is_replaceable`（**import 真实现**，不复写规则 ⇒ 想碰 `jre/` 或用户数据当场红）、完整包里**不许夹带用户数据**（`config.json` / `versions/` / `Backups/` / `logs/`）。★ 全程只在内存里比哈希 ⇒ 不落 1000+ 文件、也不撞批量删除闸。⚠️ 它证明的是**资产之间自洽**，「真 exe 能换掉自己」另归 `selfupdate_e2e.py` | **每次发版前**（`make_release_zip.py` 跑完、`release_check.py` 之前） |
 | `exe_edge_check.py` | **打包版的边界条件**：坏配置自愈 / 坏清单与非 UTF8 清单（有效版本照常列出）/ 孤儿对象宽限期 / 缺 jre 时的报错质量（**要把环境变量里的 java 摘干净再跑**，否则测到的是下一条）/ **脏 jvm 段与脏自定义参数** / **jre 路径写错时自动退回默认（配置也要改回去）** / **没 jre 但 JAVA_HOME 里有能用的 Java 时照常启动、且不写回配置**。全程在临时沙箱里跑，**不碰真实数据** | 打包部署之后；改动启动路径、配置加载、GC、日志之后 |
 | `e2e_launcher.py` | 端到端：真的走 `_monitor_game` 把游戏拉起来，确认分段计时落到日志、游戏能起到窗口出现；跑完自动关游戏 | 预热/启动流程改过之后 |
 | `e2e_jar_launch.py` | 端到端：直接用优化后的代码拼 jar 并真实启动游戏，测「点启动 → 能玩」的实际耗时 | 怀疑拼装性能有问题时 |
@@ -252,6 +258,13 @@ exe 是 PyInstaller 冻结过的另一份代码：数据根、cwd、日志文件
 | `bench_pipeline.py` | 流水线预取能不能加快 → **结论：更慢，别做** |
 | `verify_jar_opt.py` | 优化后的 jar 内容是否正确 |
 
+★ **现役的诊断开关**：上面那些脚本都退役了，但「**现场量一次拼装耗时**」的口子留着 ——
+设环境变量 `MDT_BENCH_JAR=1` 再启动启动器，它会在**真实进程**里量两种情形
+（单跑 / 跟后台 GC 并发，两者的差正好说明「后台 GC 有没有拖慢启动」），
+量完写进日志并自己退出。改 `_JAR_READ_WORKERS` / `_JAR_BATCH` 前后想拿一组真数据时用它。
+⚠️ **别拿源码运行的数字当数** —— 冻结后的 exe 与源码运行的数据根、日志路径、import
+路径都不同，拼装耗时不是一回事。实现见 `launcher/gui_core.py::_bench_jar`。
+
 ## 典型流程
 
 ```bash
@@ -263,7 +276,7 @@ python _tools/verify/selfupdate_check.py     # 3. 改了自更新：离线跑检
 #    3b. 改了自更新还想更稳：_tools/verify/selfupdate_e2e.py —— 真起 exe 换一遍（见 verify 表）
 python _tools/recycle.py dist/Mindustry启动器  # 4. ★ 打包前先清产物（见下方说明）
 python _tools/build.py --deploy              # 5. 构建并同步到运行时目录
-python _tools/verify/packed_code_check.py    # 6. 确认新代码真进了 exe
+python _tools/verify/packed_code_check.py    # 6. 确认新代码真进了 exe，且版本号对得上
 python _tools/verify/exe_edge_check.py       # 7. 改了启动/配置/日志路径后：打包版边界冒烟
 ```
 
@@ -279,20 +292,25 @@ python _tools/verify/exe_edge_check.py       # 7. 改了启动/配置/日志路�
 
 ```bash
 # 给「想自己构建 / 看代码」的人 —— 360 KB 的源码包
-python _tools/make_source_zip.py
+python _tools/make_source_zip.py --outdir _history/releases
 
 # 给「只想双击用」的人 —— 31 MB 的发布包 + 精简更新包（自带 Java）
 python _tools/make_release_zip.py
-python _tools/verify/release_check.py       # ★ 发出去之前必须跑
+python _tools/verify/release_upgrade_check.py   # ★ 老完整包 + 真更新包 == 新完整包？
+python _tools/verify/release_check.py           # ★ 发出去之前必须跑
 ```
 
 一次发版要传**两个资产**：完整包给新用户，`mindustry-launcher-v<版本>-update.zip`
 给已装旧版的用户自更新。后者只有一两 MB，所以每个完整包里都带一份
 `manifest.json`，就是下一版算差异的基线。
 
-`release_check.py` 是发布包唯一的验收手段：它会解压到**全新空目录**、
-用**完全无关的 cwd** 真启动一次（能弹窗 10 秒，别在忙时跑）。
-它证明的是「这个 zip 到别人机器上真的能跑」——光看 zip 里的文件清单证明不了。
+两个验收手段分工不同，**都要跑**：
+
+- `release_upgrade_check.py` 管「**升级路径**」：老用户拿真更新包能不能升成新版。
+  秒级跑完（不解压），发版前先跑它 —— 清单/基线/payload 任何一处对不上都会红。
+- `release_check.py` 管「**解压即用**」：它会把发布包解压到**全新空目录**、
+  用**完全无关的 cwd** 真启动一次（能弹窗 10 秒，别在忙时跑）。
+  它证明的是「这个 zip 到别人机器上真的能跑」——光看 zip 里的文件清单证明不了。
 
 ## 环境
 

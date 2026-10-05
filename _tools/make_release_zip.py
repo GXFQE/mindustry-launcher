@@ -355,6 +355,8 @@ the "ENGLISH" line further down.
     versions\\       下载的游戏版本（自动去重，相同文件只存一份）
     Backups\\        存档备份
     logs\\           游戏输出日志（每次启动一份；可在设置里关掉）
+    extensions\\     自己写的扩展（可选，见下节；没这个目录也正常）
+    lang\\           自己覆盖的界面文案（可选，见下节）
     config.json     你的设置
     launcher.log     启动器自己的运行日志 —— 出问题时先看这个
 
@@ -404,6 +406,54 @@ the "ENGLISH" line further down.
 · 删除文件时直接彻底删除（默认关闭：默认走回收站，删错了能还原）
 
 ⚠️ 改完要点右下角的 "保存并返回" 才会生效。
+
+
+【不用重新打包就能改的东西】
+
+下面几项都是往 exe 旁边加点东西、或者手改 config.json，改完重启启动器即可。
+
+· 界面文字 / 加一门语言
+  在 exe 旁边新建 lang 文件夹，放一份与程序内置同名的 JSON
+  （zh_CN.json / en_US.json），外面那份优先。想改词、想加新语言都走这条路。
+  改坏了最坏是某几句显示成设置项的名字（比如 settings.save_return），
+  不会让启动器打不开；删掉外面那份就恢复原样。
+
+· 多加几个「从哪儿下游戏版本」的来源
+  来源是一张表（config.json 的 version_sources 数组）。程序内置两个，
+  你可以往里加；type 跟内置的重名就是覆盖它（比如把内置 Mindustry
+  换成你自己的镜像仓库）。不改代码、不用重新打包。写法看下面这段：
+
+      "version_sources": [
+        { "type": "MindustryX", "api_url": "https://api.github.com/repos/TinyLake/MindustryX/releases",
+          "asset_pattern": "Desktop\\.jar$", "prerelease": false, "sort_rank": 0 },
+        { "type": "Mindustry",  "api_url": "https://api.github.com/repos/Anuken/Mindustry/releases",
+          "asset_pattern": "Mindustry.jar", "prerelease": null, "sort_rank": 1 }
+      ]
+
+  只有 type 和 api_url 是必填的。asset_pattern 是正则（挑哪个文件）、
+  prerelease 写 null 表示正式版和预发布都要、use_mirror 写 false 表示
+  这个来源不走镜像、sort_rank 小的排在前面。写坏了不会让配置失效 ——
+  那一项会被丢掉并在 launcher.log 里记一条。
+
+· 镜像下拉框里那几个候选
+  config.json 的 github_mirror_presets 数组，写进去就会出现在设置页
+  "GitHub 镜像" 的下拉框里。
+
+· 自己加一点功能
+  在数据根下建 extensions 文件夹，往里放 .py（每个文件里要有 register(api)），
+  启动时自动载入。四个钩子：on_config_loaded / on_versions_refreshed /
+  on_before_launch / on_game_exited。例如：
+
+      # extensions\\我的统计.py
+      def register(api):
+          api.on("on_game_exited", lambda **kw: print(kw["version_name"]))
+
+  ⚠️ 扩展里的代码跟启动器同权限运行，只放自己写的或信得过的文件。
+  怀疑是扩展搞的鬼时，设环境变量 MDT_NO_EXTENSIONS=1 就全部停用。
+
+⚠️ 手改 config.json 之前先关掉启动器 —— 它退出时会把整个文件重新写一遍，
+你开着它改的内容会被冲掉。改坏了不用怕：认不出的键原样保留、写坏的值
+退回默认并在 launcher.log 里记一条，不会让配置整个作废。
 
 
 【注意事项】
@@ -493,6 +543,9 @@ in one piece:
                      are stored only once)
     Backups\\         save backups
     logs\\            game output logs (one per launch; can be turned off)
+    extensions\\      your own extensions (optional, see below; a missing
+                     folder is fine)
+    lang\\            interface text you override yourself (optional, below)
     config.json      your settings
     launcher.log     the launcher's own log -- check this first when
                      something goes wrong
@@ -555,6 +608,60 @@ WHAT YOU CAN CHANGE IN SETTINGS
 
 ⚠️ Nothing takes effect until you click "保存并返回" (Save and go back) in
 the bottom right.
+
+
+TWEAKING IT WITHOUT REPACKING
+
+Everything below is either "drop a file next to the .exe" or "hand-edit
+config.json". Restart the launcher and it takes effect.
+
+- Interface text / another language
+  Create a lang folder next to the .exe and drop in a JSON file named like
+  the built-in one (zh_CN.json / en_US.json). The outside copy wins. This is
+  how you reword things or add a language. Worst case if you break it: a few
+  labels show up as setting names (e.g. settings.save_return); the launcher
+  still opens. Delete your copy to go back to the shipped text.
+
+- More places to download game versions from
+  The sources are a table (the version_sources array in config.json). Two are
+  built in; you can add more, and a type that collides with a built-in
+  OVERRIDES it (e.g. point the built-in Mindustry entry at your own mirror).
+  No code change, no repacking. The two built-ins, as a format reference:
+
+      "version_sources": [
+        { "type": "MindustryX", "api_url": "https://api.github.com/repos/TinyLake/MindustryX/releases",
+          "asset_pattern": "Desktop\\.jar$", "prerelease": false, "sort_rank": 0 },
+        { "type": "Mindustry",  "api_url": "https://api.github.com/repos/Anuken/Mindustry/releases",
+          "asset_pattern": "Mindustry.jar", "prerelease": null, "sort_rank": 1 }
+      ]
+
+  Only type and api_url are required. asset_pattern is a regex picking which
+  file to take; prerelease null means both stable and pre-releases;
+  use_mirror false means this source skips the mirror; a lower sort_rank
+  sorts first. A broken entry does not invalidate your config -- it is
+  dropped and logged to launcher.log.
+
+- The mirror dropdown itself
+  The github_mirror_presets array in config.json. Whatever you put there
+  shows up in the "GitHub 镜像" (GitHub mirror) dropdown in Settings.
+
+- Your own feature
+  Create an extensions folder in the data root and drop .py files in it (each
+  needs a register(api)); they load at startup. Four hooks: on_config_loaded /
+  on_versions_refreshed / on_before_launch / on_game_exited. For example:
+
+      # extensions\\my_stats.py
+      def register(api):
+          api.on("on_game_exited", lambda **kw: print(kw["version_name"]))
+
+  Extension code runs with the same privileges as the launcher -- only use
+  files you wrote or trust. If you suspect an extension is causing trouble,
+  set the environment variable MDT_NO_EXTENSIONS=1 to disable all of them.
+
+⚠️ Close the launcher before hand-editing config.json -- it rewrites the whole
+file on exit and will overwrite what you typed. Breaking it is not fatal:
+unknown keys are kept as-is, bad values fall back to their default and a line
+is written to launcher.log. Your config is never thrown away as "corrupt".
 
 
 NOTES

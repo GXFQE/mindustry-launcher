@@ -26,6 +26,9 @@ Chinese in the first half, English in the second.
 
 - **Several versions at once** — identical files are stored only once, so a second
   version does not cost you a full extra copy.
+- **Version management** — import a local jar someone gave you (pick the `desktop.jar`);
+  rename or delete versions you no longer play. All of it lives under
+  **"管理版本" (Manage versions)**.
 - **Save profiles** — each profile gets a completely separate game data directory.
   Switch profile, and the game reads a different set of saves. Each profile has its
   own data directory, minimum play time, and backup count.
@@ -45,6 +48,8 @@ Everything sits next to the exe — copy the whole folder and it all comes with 
 versions\       downloaded game versions (deduplicated)
 Backups\        save backups
 logs\           game output logs (one per launch; can be turned off)
+extensions\     your own extensions (optional, see below; a missing folder is fine)
+lang\           interface text you override yourself (optional, see below)
 config.json     your settings
 launcher.log    the launcher's own log — look here first when something goes wrong
 ```
@@ -63,6 +68,56 @@ launcher.log    the launcher's own log — look here first when something goes w
   be restored. Turn it on and they are gone for good.
 
 ⚠️ Click **Save and return** at the bottom right, or your changes are not applied.
+
+## Tweaking it without rebuilding
+
+Everything below is either "drop a file next to the exe" or "hand-edit `config.json`".
+Restart the launcher and it takes effect — no repackaging, no programming required.
+
+- **Interface text / another language** — create a `lang\` folder next to the exe and drop
+  in a JSON file **named like the built-in one** (`zh_CN.json` / `en_US.json`). **The
+  outside copy wins.** This is how you reword things or add a language. Worst case if you
+  break it: a few labels show up as setting names (e.g. `settings.save_return`); the
+  launcher still opens. Delete your copy and it goes back to normal.
+- **More places to download game versions from** — the sources are a table
+  (the `version_sources` array in `config.json`). Two are built in; you can add more, and
+  a `type` that collides with a built-in **overrides** it (e.g. point the built-in
+  Mindustry entry at your own mirror). No code change, no repackaging. Field meanings are
+  in `launcher/sources.py`. The two built-ins look like this — copy the shape:
+
+  ```json
+  "version_sources": [
+    { "type": "MindustryX",  "api_url": "https://api.github.com/repos/TinyLake/MindustryX/releases",
+      "asset_pattern": "Desktop\\.jar$", "prerelease": false, "sort_rank": 0 },
+    { "type": "Mindustry",   "api_url": "https://api.github.com/repos/Anuken/Mindustry/releases",
+      "asset_pattern": "Mindustry.jar", "prerelease": null, "sort_rank": 1 }
+  ]
+  ```
+
+  Only `type` and `api_url` are required. Optional: `asset_pattern` (regex picking which
+  file to take), `prerelease` (`true` / `false` / `null` = both stable and pre-releases),
+  `use_mirror` (`false` = this source skips the mirror), `sort_rank` (lower sorts first).
+  A broken entry does not invalidate your config — it is dropped and logged.
+- **The mirror dropdown itself** — the `github_mirror_presets` array in `config.json`.
+  Whatever you put there shows up in the **GitHub mirror** dropdown in Settings.
+- **Your own feature** — create an `extensions\` folder in the data root and drop `.py`
+  files in it (each needs a `register(api)`); they load at startup. Four hooks:
+  `on_config_loaded` / `on_versions_refreshed` / `on_before_launch` / `on_game_exited`.
+
+  ```python
+  # extensions\my_stats.py
+  def register(api):
+      api.on("on_game_exited", lambda **kw: print(kw["version_name"], kw["playtime_minutes"]))
+  ```
+
+  ⚠️ Extension code runs with the **same privileges** as the launcher — only use files you
+  wrote or trust. If you suspect an extension is causing trouble, set the environment
+  variable `MDT_NO_EXTENSIONS=1` to disable all of them.
+
+⚠️ **Close the launcher before hand-editing `config.json`** — it rewrites the whole file on
+exit and will overwrite what you typed. Breaking it is not fatal: unknown keys are kept
+as-is, bad values fall back to their default, and a line is written to `launcher.log`. Your
+config is never thrown away as "corrupt".
 
 ## Notes
 

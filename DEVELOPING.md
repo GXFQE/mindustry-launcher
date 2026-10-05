@@ -67,7 +67,7 @@ python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/la
 python _tools/verify/selfupdate_check.py         # 3. After touching self-update: offline check/swap/rollback run (92 checks)
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ Clear build output before packaging
 python _tools/build.py --deploy                  # 5. Build + sync to the deploy directory
-python _tools/verify/packed_code_check.py        # 6. Confirm the new code really made it into the exe
+python _tools/verify/packed_code_check.py        # 6. Confirm the new code made it into the exe, version values included
 python _tools/verify/exe_edge_check.py           # 7. After touching startup/config/log paths: packaged-build edge-case smoke test
 ```
 
@@ -78,7 +78,11 @@ python _tools/verify/exe_edge_check.py           # 7. After touching startup/con
   do land in the recycle bin.
 - **Step 6 is not optional.** If source changed but did not make it into the package, or the
   spec missed a module, the exe still starts, the window still appears, and nothing is
-  reported — it just runs the old logic. "It opens" proves nothing.
+  reported — it just runs the old logic. "It opens" proves nothing. It also **runs
+  `launcher.version` for real** and asserts the version values equal the source's (checking
+  that a symbol exists cannot tell you *what version it is* — after a missed rebuild the exe
+  happily starts carrying the previous version number, and `USER_AGENT` plus the release
+  manifest go wrong with it).
 - Deployment is **incremental**: `_internal/` holds close to a thousand files, so recopying
   the whole directory is slow and trips the delete gate. Only genuinely differing files are
   copied. `--deploy-to <dir>` picks a target; `--prune` additionally removes stale files.
@@ -88,7 +92,7 @@ python _tools/verify/exe_edge_check.py           # 7. After touching startup/con
 
 | Artifact | Command | Size | For whom |
 |---|---|---|---|
-| **Source zip** | `python _tools/make_source_zip.py` | ~360 KB | People who want to build it or read the code |
+| **Source zip** | `python _tools/make_source_zip.py --outdir _history/releases` | ~360 KB | People who want to build it or read the code |
 | **Release zip** | `python _tools/make_release_zip.py` | ~31 MB | People who just want to double-click (no Python / Java needed) |
 | **Update zip** | produced by the command above | ~2 MB | **People on an older version** — the launcher downloads it during self-update |
 
@@ -114,16 +118,26 @@ python _tools/make_release_zip.py --no-update     # full package only
 ```
 
 ⚠️ With no baseline it **degrades to a full update package** (tens of MB) — bigger, but it can
-never miss a file. Run the acceptance check before shipping:
+never miss a file. Run **two** acceptance checks before shipping; they cover different things
+and both are required:
 
 ```bash
-python _tools/verify/release_check.py
+python _tools/verify/release_upgrade_check.py   # upgrade path (seconds, no extraction)
+python _tools/verify/release_check.py           # extract-and-run (pops a GUI window for ~10s)
 ```
 
-It extracts into a **pristine empty directory**, launches from a **completely unrelated cwd**,
-and asserts that key dependencies are present and that data lands next to the exe
-(⚠️ it pops a GUI window for about 10 seconds). Reading the zip's file list cannot prove
-"this really runs on someone else's machine" — only an actual launch can.
+- `release_upgrade_check.py` lines up the three recorded assets (old full package / real
+  update package / new full package) and walks a four-step proof chain: old package's real
+  hashes == old manifest → same for the new package → the update payload's hashes *and* its
+  entry set equal what it declares → **applying the update to the old manifest reproduces the
+  new manifest entry by entry**. Two extra guards: every path must pass
+  `selfupdate._is_replaceable` (trying to touch `jre/` or user data fails on the spot), and the
+  full package must not carry user data. It proves **an old install can upgrade** — exactly the
+  place update packages fail and unit tests cannot see.
+- `release_check.py` extracts into a **pristine empty directory**, launches from a
+  **completely unrelated cwd**, and asserts that key dependencies are present and that data
+  lands next to the exe. It proves **the zip really runs on someone else's machine**. Reading
+  the zip's file list can prove neither of those — only an actual run can.
 
 ## Configuration internals
 

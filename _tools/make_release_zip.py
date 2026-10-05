@@ -321,7 +321,11 @@ def default_runtime_dir() -> Path:
 # --------------------------------------------------------------------------
 
 USAGE = """Mindustry 启动器 —— 使用说明
+Mindustry Launcher — User Guide
 ============================================================
+本文件上半部分是中文，下半部分是英文 —— 英文从下面 "ENGLISH" 那一行开始。
+This file is bilingual: the first half is Chinese, the English half starts at
+the "ENGLISH" line further down.
 
 【这是什么】
 
@@ -439,6 +443,167 @@ USAGE = """Mindustry 启动器 —— 使用说明
 
 本程序不修改、也不重新分发游戏本体 —— 它只是从官方发布页下载
 可执行文件并启动。
+
+
+============================================================
+ENGLISH
+============================================================
+
+
+WHAT THIS IS
+
+A multi-version launcher for Mindustry. It keeps several game versions side
+by side, isolates your data per save profile, and backs up your saves
+automatically. You do not need Python or a separate Java install -- both are
+bundled in this folder.
+
+
+HOW TO USE
+
+1. Extract the whole folder somewhere you normally keep things, e.g.
+   D:\\Mindustry. Avoid C:\\Program Files or the Desktop -- they may not be
+   writable.
+
+2. Double-click "Mindustry启动器.exe" (the file name is Chinese; it is the
+   only .exe in the top folder).
+
+3. On first run there are no game versions yet. Click "检查更新" (Check for
+   updates) to download one. Downloads come from GitHub; if that is slow
+   where you are, open "设置" (Settings) and put a mirror in "GitHub 镜像"
+   -- the dropdown lists a few common ones, and you can type your own
+   address. Leave it empty to talk to GitHub directly.
+
+4. Select a version in the list, then click "启动游戏" (Launch game).
+
+Interface language: the launcher follows your system language by default,
+and ships Simplified Chinese and English. If that is not what you want, go
+to "设置" (Settings) -> "界面语言" (Interface language) and pick
+English / 简体中文 / follow system, then click "保存并返回" (Save and go
+back). Every window and message is bilingual. The button labels quoted in
+this guide are Chinese on disk; the English in brackets is what you will see
+once the interface is in English.
+
+
+WHERE YOUR DATA LIVES
+
+Everything sits next to the .exe, so you can move or back up the whole folder
+in one piece:
+
+    versions\\        downloaded game versions (deduplicated: identical files
+                     are stored only once)
+    Backups\\         save backups
+    logs\\            game output logs (one per launch; can be turned off)
+    config.json      your settings
+    launcher.log     the launcher's own log -- check this first when
+                     something goes wrong
+
+
+MAIN FEATURES
+
+- Save profiles
+  Every profile uses a completely separate game data directory. Switch
+  profile, launch, and the game reads a different set of saves -- no
+  interference. Each profile has its own data directory, minimum backup
+  interval and maximum backup count.
+
+- Automatic backups
+  Saves are backed up after you quit the game, once the conditions are met.
+  Defaults: back up after a session of at least 20 minutes, keep at most 20
+  copies, and delete the oldest beyond that.
+
+- Version management
+  Import a local jar, rename, delete -- all under "管理版本" (Manage
+  versions).
+
+- Pre-warming
+  As soon as the window opens, the launcher starts assembling the selected
+  version's game files in the background. When you click Launch it reuses
+  that work, saving a few seconds.
+
+- The launcher updates itself
+  When a new version is out it downloads quietly in the background and swaps
+  itself in the next time you close it -- no manual download and extraction.
+  Only the files that actually changed are fetched (usually just the main
+  executable, one or two MB), so it is quick. Your game versions, save
+  backups and settings are not touched, and a jre you replaced yourself is
+  left alone. Prefer to be asked first, or to turn it off entirely? Change
+  "启动器更新" (Launcher update) in Settings (default: automatic).
+
+
+WHAT YOU CAN CHANGE IN SETTINGS
+
+- Save profiles: name, data directory, minimum backup interval, maximum
+  backup count
+- Hide the window while the game runs; close the launcher after the game
+  exits (only once backups are done)
+- Check for updates on startup
+- Launcher update -- upgrade the launcher itself automatically (on by
+  default; can also only notify, or be off)
+- Interface language -- follow system / 简体中文 / English; takes effect as
+  soon as you click "保存并返回" (the whole interface, every window and
+  message, is bilingual -- to reword things or add a language, drop a lang
+  folder holding a same-named JSON next to the .exe, no repacking needed)
+- Java path (JRE/JDK) -- either works, point it at the root folder. "浏览"
+  (Browse) and "检测" (Detect) sit next to it; Detect really runs
+  java -version to tell you whether that copy is usable
+- GitHub mirror -- for faster downloads; empty means direct GitHub
+- Extra JVM arguments / extra game arguments -- for memory tuning or launch
+  flags
+- Save game output to logs\\, and how many log files to keep
+- Delete files permanently (off by default: deletions go to the Recycle Bin
+  so you can undo them)
+
+⚠️ Nothing takes effect until you click "保存并返回" (Save and go back) in
+the bottom right.
+
+
+NOTES
+
+- Antivirus software may flag the .exe -- common for PyInstaller builds.
+  Allow/trust it.
+
+- Deleting a save profile also handles that profile's data directory and
+  backups. The launcher lists exactly what it is about to touch and asks you
+  to confirm, so nothing is removed behind your back, and by default it goes
+  to the Recycle Bin so you can undo it. To delete outright in one step,
+  turn on "删除文件时直接彻底删除" in Settings -- after that those files are
+  really gone.
+
+- The bundled Java is Temurin 25, which is plenty. To use another version,
+  drop a new jre folder next to the .exe and overwrite -- the launcher does
+  not need repacking. If you have a JDK installed, you can also point
+  Settings straight at its folder. Getting it wrong is safe: the launcher
+  falls back to the bundled copy, and if even that is missing it looks for
+  Java in JAVA_HOME / PATH.
+
+- Interface text lives in the lang folder shipped with the program
+  (_internal\\lang\\ once packaged). To reword a translation, or to add a
+  language, create a lang folder next to the .exe and put a same-named JSON
+  inside -- the outside copy wins, no repacking needed. Worst case a few
+  strings show up as setting names (e.g. settings.save_return); the launcher
+  still opens. Delete the outside copy to go back to the shipped text.
+
+- When the launcher upgrades itself it only replaces program files (the .exe
+  and the _internal directory), replacing _internal first and the .exe last.
+  Game versions, save backups and the settings file are left alone, and the
+  jre folder is not touched. If a replacement fails, it rolls back to the
+  previous version and records it in launcher.log.
+
+- If a profile's data directory points at Mindustry's own native directory,
+  deletions trigger one extra warning.
+
+- If both "Check for updates" and the launcher's self-update keep failing, it
+  is usually a GitHub connectivity problem. You can set the environment
+  variable MDT_SELFUPDATE_API to point at a proxy address that works for you.
+
+- When reporting a problem, send launcher.log along -- it records every step
+  the launcher took.
+
+
+ABOUT
+
+This program does not modify and does not redistribute the game itself -- it
+only downloads the executable from the official release page and launches it.
 """
 
 
@@ -546,6 +711,10 @@ def main() -> int:
     print(f"exe    ：{exe.name}  {_human(exe.stat().st_size)}  "
           f"sha256={_sha256(exe)[:16]}…")
 
+    # 清单的**字节形态**在这里定死一次，包内与本地留档共用同一份 bytes ——
+    # 这样两边天然逐字节相同，审计基线时不会出现"内容一样、sha256 不一样"。
+    manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+
     if zip_path.exists():
         zip_path.unlink()
 
@@ -558,10 +727,7 @@ def main() -> int:
         # 使用说明是现生成的，直接写进 zip
         z.writestr(f"{TOP}/使用说明.txt", USAGE.encode("utf-8-sig"))
         # 程序文件清单（使用者不用管它，但下一版发版要靠它算差异）
-        z.writestr(
-            f"{TOP}/manifest.json",
-            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-        )
+        z.writestr(f"{TOP}/manifest.json", manifest_bytes)
 
     took = time.time() - t0
     size = zip_path.stat().st_size
@@ -597,9 +763,11 @@ def main() -> int:
     # 留档：下一版算更新包差异时要用它当基线（这个目录不进 git，纯本地档案）
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     archive = MANIFEST_DIR / f"manifest-{version}.json"
-    archive.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # ★ 必须写**字节**，不能用 write_text：Windows 的文本模式会把 \n 翻成 \r\n，
+    #   而包内那份是 writestr 写的原始字节（只有 \n）—— 于是"内容一样、
+    #   sha256 不一样"，审计基线时会白白怀疑留档不是发出去的那份（已踩过）。
+    #   这里直接用上面那同一份 manifest_bytes，两边由构造保证一致。
+    archive.write_bytes(manifest_bytes)
     print(f"  清单留档：{archive}")
 
     if args.no_update:

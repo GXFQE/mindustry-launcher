@@ -19,7 +19,8 @@ Get a package from [Releases](../../releases/latest), extract it somewhere you h
 There is no game version on first run: click **Check for updates** to download one,
 then select it in the list and click **Launch**.
 
-See `使用说明.txt` inside the package for the same information in Chinese.
+`使用说明.txt` inside the package covers the same ground, and is bilingual:
+Chinese in the first half, English in the second.
 
 ## What it does
 

@@ -36,7 +36,7 @@
 
 用法：
     python _tools/verify/release_upgrade_check.py              # 自动挑最新的一对
-    python _tools/verify/release_upgrade_check.py --from 1.2.0 --to 1.2.1
+    python _tools/verify/release_upgrade_check.py --from <旧版本> --to <新版本>
     python _tools/verify/release_upgrade_check.py --releases <目录>
 """
 from __future__ import annotations

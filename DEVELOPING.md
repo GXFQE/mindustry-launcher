@@ -60,7 +60,7 @@ LICENSE                 Full GNU GPL-3.0 text
 ## Development workflow
 
 ```bash
-python _tools/verify/code_regression.py          # 1. Run after any code change (344 checks)
+python _tools/verify/code_regression.py          # 1. Run after any code change (361 checks)
 python _tools/verify/i18n_check.py               # 1b. After touching strings/features: language-pack and "no hardcoded strings" gate (35 checks)
 python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (116 checks, no game launched)
 python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/languages: really build windows and switch language (29 checks)
@@ -265,3 +265,14 @@ decisions that go against the grain:
   version are assembled in the background, so clicking Launch reuses them.
 - **Write the whole config in one place**: `set*()` calls only update memory; a single `save()`
   at the end persists. Writing on every setter is how you get half-written config files.
+- **Two things the game keeps outside the data directory** (confirmed by disassembling the
+  160.5 classes — do not infer this from upstream `master`): `last_log.txt` is opened in
+  `DesktopLauncher.main()`, hard-wired to `OS.getAppDataDirectoryString("Mindustry")`, long
+  before `setup()` applies `-Dmindustry.data.dir` — and `loadFileLogger()` has a one-shot
+  `loadedFileLogger` guard, so the call inside `setup()` is a **no-op**. `was_intel_gpu` never
+  uses the data directory at all: it is a machine-level probe cache ("was the last launch on
+  an Intel GPU"), one byte, self-correcting on every launch. ⇒ Save-profile isolation cannot
+  cover these and no command-line flag can redirect them. The launcher can only **copy** the
+  log into the profile's data directory after the game exits
+  (`gamelog.salvage_last_log`) — that is exactly where the game's own "export logs" button
+  looks, and without the copy it tells the user there are no logs.

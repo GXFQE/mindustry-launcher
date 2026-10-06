@@ -21,6 +21,7 @@ import collections
 import locale
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -32,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 LOG_DIR_NAME = "logs"
 LOG_PREFIX = "game-"
+# 游戏自己那份滚动日志的文件名。★ 它**不在**数据目录里 —— 根因见
+# salvage_last_log()，启动器只能等游戏退出后把它抄回来。
+GAME_LAST_LOG = "last_log.txt"
+# 判断「这份日志是不是本局写的」时的容差（秒）：文件时间戳粒度、
+# 以及写文件与取时间戳之间那一点先后差，都吃掉。
+_MTIME_SLACK = 2.0
 
 
 def fallback_encoding() -> str:
@@ -75,6 +82,85 @@ def decode_output_line(raw: bytes | str) -> str:
     else:
         text = raw                      # 已经是文本，别再解第二次
     return text.rstrip("\r\n")
+
+
+def salvage_last_log(
+    native_dir: str | Path,
+    data_dir: str | Path,
+    launched_at: float | None = None,
+) -> Path | None:
+    """把游戏写在原生目录里的 ``last_log.txt`` 抄一份到该分类的数据目录。
+
+    ★ **为什么游戏那份日志会跑出数据目录**（2026-10-06 反汇编 160.5 的 class
+      定案，不是猜的）：日志句柄在 ``DesktopLauncher.main()`` 里就打开了 ——
+      路径硬写成 ``new Fi(OS.getAppDataDirectoryString("Mindustry"))
+      .child("last_log.txt")``，比 ``ClientLauncher.setup()`` 那两行应用
+      ``-Dmindustry.data.dir`` / ``MINDUSTRY_DATA_DIR`` 早得多；而
+      ``Vars.loadFileLogger()`` 有 ``loadedFileLogger`` 一次性守卫，
+      ``setup()`` 里那次调用是**空操作**。所以命令行怎么传都没用，
+      这份日志永远落在 ``%APPDATA%\\Mindustry\\`` 下。
+
+    ★ **那为什么还要抄回来**：**游戏自己认为它在数据目录里**。
+      ``SettingsMenuDialog.getLogs()``（游戏内「导出日志」）读的是
+      ``settings.getDataDirectory().child("last_log.txt")``，也就是分类的
+      数据目录。隔离一开那条路径根本不存在 ⇒ 游戏里的导出功能直接说
+      「没有日志」。抄回来既把这个功能修好，也让每个分类各留一份自己的
+      最近日志 —— 原来所有分类共用原生目录里那一份，互相覆盖。
+
+    这些情况直接跳过、返回 ``None``（都不是错误，不记 warning）：
+
+    * 原生目录和数据目录是同一个 —— 「默认」分类就是这样，没什么可抄；
+    * 原生那份不存在（游戏没走到写日志那步）；
+    * 传了 ``launched_at`` 而它的 mtime 比这还早 —— 日志一打开就会截断重写，
+      所以 mtime 早于本局启动时间说明游戏根本没起来，那是上一局（甚至手工
+      直接启动游戏）留下的陈旧文件，抄过去只会误导排查。
+
+    ★ 一律不抛异常：这是收尾路径，绝不能因为一个日志文件把自动备份和
+      「游戏退出后关闭启动器」搅黄。失败只记 warning 并返回 ``None``。
+
+    返回抄好的目标路径，跳过或失败时返回 ``None``。
+    """
+    native = Path(native_dir) / GAME_LAST_LOG
+    target = Path(data_dir) / GAME_LAST_LOG
+
+    try:
+        # resolve 是为了认出「分类目录其实是指向原生目录的 junction」
+        # 这种配置 —— 那样两边是同一个文件，抄了等于没抄。
+        if Path(native_dir).resolve() == Path(data_dir).resolve():
+            return None
+    except OSError as e:                  # 断开网络盘之类的病态路径
+        logger.debug(f"比较数据目录失败，按「不同」处理: {e}")
+
+    try:
+        if not native.is_file():
+            logger.debug(f"原生目录里没有 {native.name}，无需回收")
+            return None
+        if (
+            launched_at is not None
+            and native.stat().st_mtime < launched_at - _MTIME_SLACK
+        ):
+            logger.debug(
+                f"{native} 不是本局写的（mtime 早于启动时间），跳过回收"
+            )
+            return None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # ★ 用 copyfile 而**不是** copy2：copy2 碰到「目标位置是个目录」会把
+        #   文件悄悄拷进那个目录**里面**并算成功 —— 日志上说「收好了」，实际
+        #   写到了一层之外（实测 Windows 上就是这个结果）。copyfile 会老实
+        #   报 PermissionError，宁可失败也不要这种假成功。
+        shutil.copyfile(native, target)
+        try:
+            # 时间戳保留是锦上添花：内容已经到位，这步失败不该算这次回收失败。
+            shutil.copystat(native, target)
+        except OSError as e:
+            logger.debug(f"保留日志时间戳失败（内容已拷好）: {e}")
+    except OSError as e:
+        logger.warning(f"回收游戏日志失败（{native} -> {target}）: {e}")
+        return None
+
+    logger.info(f"游戏日志已收进分类数据目录: {target}")
+    return target
+
 
 class GameLog:
     """一次游戏会话的输出收集。

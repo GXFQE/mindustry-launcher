@@ -10,8 +10,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
+from .config import DEFAULT_PROFILE_NAME, default_data_dir
 from .gamecmd import build_java_command, split_args
-from .gamelog import GameLog
+from .gamelog import GameLog, salvage_last_log
 from .i18n import t
 
 logger = logging.getLogger(__name__)
@@ -493,6 +494,7 @@ class GameMixin:
         —— 见 _close_after_game。
         """
         proc = None
+        start = None
         try:
             with self._proc_lock:
                 proc = self.current_process
@@ -533,6 +535,22 @@ class GameMixin:
         except Exception as e:
             logger.error(f"游戏会话异常: {e}", exc_info=True)
         finally:
+            # ★ 把游戏写在数据目录**之外**的那份 last_log.txt 收进分类目录
+            #   （游戏只认 %APPDATA%\Mindustry\last_log.txt，怎么传参都没用；
+            #   完整根因见 gamelog.salvage_last_log）。
+            #   ① 排在自动备份**之后**是有意的：create_backup() 会 walk 整个
+            #      数据目录，日志每局都变、几百 KB，没必要进备份 —— 备份在
+            #      try 里，天然早于这里。
+            #   ② 放在 finally 里，则「备份失败」「启动器正在退出而提前
+            #      return」这些路径上也照样收。
+            try:
+                salvage_last_log(
+                    default_data_dir(DEFAULT_PROFILE_NAME),
+                    self.config.get_save_path(profile_name),
+                    launched_at=start,
+                )
+            except Exception as e:                              # noqa: BLE001
+                logger.debug(f"回收游戏日志时出错（忽略）: {e}")
             # 只删自己拼的那个。预热出来的 jar 要留着给下一次启动复用，
             # 而且它可能还被刚退出的 JVM 占着（删了也没关系，是 tmp）。
             if own_jar and temp_jar is not None and temp_jar.exists():

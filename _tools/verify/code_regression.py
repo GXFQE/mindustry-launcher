@@ -512,6 +512,7 @@ def main():
     test_settings_flow_and_autoclose()
     test_jre_probe_and_permanent_delete()
     test_release_compat_layer()
+    test_salvage_game_log()
     print("\n" + "=" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
     if FAIL:
@@ -2558,6 +2559,134 @@ def test_release_compat_layer():
 
     for name, level in _saved_levels.items():
         logging.getLogger(name).setLevel(level)
+
+
+# ---------- 17. 游戏写在数据目录**之外**的那份 last_log.txt ----------
+def test_salvage_game_log():
+    """用户报告：「隔离不是全覆盖的」—— settings.bin / cache / previews 都进了
+    隔离目录，但 last_log.txt 和 was_intel_gpu 还写在默认目录。
+
+    ★ 根因是**反汇编 160.5 的 class** 定案的，不是读上游 master 得来的
+    （两边的调用顺序不一样，只看 master 会得出「顺序是对的」这种错结论）：
+    日志句柄在 ``DesktopLauncher.main()`` 里就打开了，路径硬写成
+    ``new Fi(OS.getAppDataDirectoryString("Mindustry")).child("last_log.txt")``，
+    早于 ``ClientLauncher.setup()`` 应用 ``-Dmindustry.data.dir``；
+    而 ``Vars.loadFileLogger()`` 有 ``loadedFileLogger`` 一次性守卫，
+    ``setup()`` 里那次调用是**空操作**。⇒ 命令行传参救不了，只能退出后抄回来。
+
+    （``was_intel_gpu`` 那条**故意不修**：``IntelGpuCheck`` 同样硬写 AppData，
+    而且它是「上次是不是 Intel GPU」的**机器级**探测缓存 —— 一个字节、
+    每次启动自纠正，跟存档分类无关，隔离它没有意义。）
+
+    这里钉五件事：该抄的抄、该跳的跳（同一目录 / 没这个文件 / 陈旧文件）、
+    失败不许抛、以及**它是会覆盖的**（语义＝本分类最近一份日志）。
+    """
+    print("\n[17] 游戏日志回收（游戏写在数据目录之外的那份 last_log.txt）")
+    from launcher.gamelog import GAME_LAST_LOG, salvage_last_log
+
+    sb = Path(tempfile.mkdtemp(prefix="mdt_salvage_"))
+    native = sb / "native"
+    native.mkdir()
+    now = time.time()
+
+    def write_native(text, mtime=None):
+        f = native / GAME_LAST_LOG
+        f.write_text(text, encoding="utf-8")
+        if mtime is not None:
+            os.utime(f, (mtime, mtime))
+        return f
+
+    # ---- 1) 该抄的抄 ----
+    write_native("本局日志\n")
+    profile = sb / "profile"
+    got = salvage_last_log(native, profile, launched_at=now)
+    target = profile / GAME_LAST_LOG
+    check("原生目录里的 last_log.txt 会被抄进分类数据目录",
+          got == target and target.is_file(), str(got))
+    check("抄回来的内容与原生那份逐字节一致",
+          target.read_bytes() == (native / GAME_LAST_LOG).read_bytes())
+    check("目标目录不存在时自动建出来", profile.is_dir())
+
+    # ---- 2) 「默认」分类：两边本来就是同一个目录 ----
+    before = (native / GAME_LAST_LOG).stat().st_mtime
+    check("原生目录 == 数据目录时跳过（默认分类就是这种情况）",
+          salvage_last_log(native, native, launched_at=now) is None)
+    check("跳过时没有动过原生那份文件",
+          (native / GAME_LAST_LOG).stat().st_mtime == before)
+
+    # ---- 3) 源不存在 ----
+    empty = sb / "empty"
+    empty.mkdir()
+    check("原生目录里没有这个文件时跳过",
+          salvage_last_log(empty, sb / "p2", launched_at=now) is None)
+
+    # ---- 4) 陈旧文件：游戏没起来，那是上一局（或手工启动）留下的 ----
+    write_native("上一局的日志\n", mtime=now - 3600)
+    stale = sb / "p3"
+    check("mtime 早于本局启动时间 ⇒ 判为陈旧，跳过",
+          salvage_last_log(native, stale, launched_at=now) is None)
+    check("跳过陈旧文件时不会凭空造出一个目标文件",
+          not (stale / GAME_LAST_LOG).exists())
+
+    # ---- 5) 会覆盖：语义就是「本分类最近一份日志」----
+    fresh = sb / "p4"
+    fresh.mkdir()
+    (fresh / GAME_LAST_LOG).write_text("上一份\n", encoding="utf-8")
+    write_native("这一份\n", mtime=now)
+    salvage_last_log(native, fresh, launched_at=now)
+    check("目标已存在时会被本局这份覆盖（语义＝最近一份）",
+          (fresh / GAME_LAST_LOG).read_text(encoding="utf-8") == "这一份\n")
+
+    # ---- 6) 拷贝失败不许抛：收尾路径不能被一个日志文件搞挂 ----
+    # ★ 这条还钉着一个具体的坑：`shutil.copy2` 遇到「目标位置是个目录」会
+    #   把文件悄悄拷进那个目录**里面**并算成功（copyfile 才会老实报错）——
+    #   换回 copy2 的话下面两条就会红。
+    bad = sb / "p5"
+    bad_dir = bad / GAME_LAST_LOG
+    bad_dir.mkdir(parents=True)                    # 目标位置占成目录 ⇒ 拷不进去
+    try:
+        got, raised = salvage_last_log(native, bad, launched_at=now), ""
+    except Exception as e:                                   # noqa: BLE001
+        got, raised = "抛了", f"{type(e).__name__}: {e}"
+    check("拷贝失败时返回 None 且不抛异常",
+          raised == "" and got is None, raised or str(got))
+    check("失败时没有偷偷写到那个目录里面（copy2 就会这么干）",
+          list(bad_dir.iterdir()) == [])
+
+    # ---- 7) 接线：怎么接的比接没接更要紧 ----
+    gg = ast.parse((ROOT / "launcher" / "gui_game.py").read_text(encoding="utf-8"))
+    session = _func_def(gg, "_game_session")
+    calls = _calls_named(session, "salvage_last_log")
+    backups = [
+        n for n in ast.walk(session)
+        if isinstance(n, ast.Call) and _dotted(n.func) == "create_backup"
+    ]
+    check("_game_session 里真接了回收（不是写了个没人调用的函数）",
+          len(calls) == 1, f"{len(calls)} 处")
+    check("★ 回收排在自动备份**之后**"
+          "（create_backup 会 walk 整个数据目录，日志每局都变，不该进备份）",
+          bool(calls) and bool(backups)
+          and min(c.lineno for c in calls) > max(b.lineno for b in backups),
+          f"备份在 {[b.lineno for b in backups]}，"
+          f"回收在 {[c.lineno for c in calls]}")
+    args = (calls[0].args + [None, None])[:2] if calls else [None, None]
+    check("回收传的是「游戏原生目录 + 该分类的数据目录」",
+          _callee(args[0]) == "default_data_dir"
+          and _callee(args[1]) == "self.config.get_save_path",
+          f"{_callee(args[0])} / {_callee(args[1])}")
+    check("第一个参数取的是**默认分类**的目录（＝游戏原生目录）",
+          _callee(args[0]) == "default_data_dir"
+          and len(args[0].args) == 1
+          and _dotted(args[0].args[0]) == "DEFAULT_PROFILE_NAME",
+          str([_dotted(a) for a in getattr(args[0], "args", [])]))
+    check("传了 launched_at（否则游戏没起来时会抄一份上一局的文件过去）",
+          bool(calls) and any(k.arg == "launched_at" for k in calls[0].keywords))
+    check("回收被包在 try 里（收尾路径不能被一个日志文件搞挂）",
+          bool(calls) and any(
+              isinstance(n, ast.Try)
+              and any(c is calls[0] for c in ast.walk(n))
+              for n in ast.walk(session)
+          ))
 
 
 if __name__ == "__main__":

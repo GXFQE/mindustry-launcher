@@ -58,7 +58,7 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（344 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（361 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
 python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（116 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
@@ -221,3 +221,12 @@ python _tools/verify/release_check.py           # 解压即用（会弹 GUI 窗�
 - **启动预热**：窗口一能用来就在后台把当前版本的游戏文件拼好，点启动直接复用。
 - **配置只在末尾统一落盘**：`set*()` 只改内存，最后一次性 `save()`。每设一个值就写一次
   盘，是写出「半份配置」的经典方式。
+- **游戏有两样东西不听数据目录的**（反汇编 160.5 的 class 定过案，别照着上游 master 推）：
+  `last_log.txt` 在 `DesktopLauncher.main()` 里就打开了，路径硬写
+  `OS.getAppDataDirectoryString("Mindustry")`，早于 `setup()` 应用
+  `-Dmindustry.data.dir` —— 而且 `loadFileLogger()` 有一次性的 `loadedFileLogger`
+  守卫，`setup()` 里那次调用是**空操作**；`was_intel_gpu` 则干脆不用数据目录，它是
+  「上次是不是 Intel GPU」的机器级探测缓存（一个字节、每次启动自纠正）。
+  ⇒ 存档隔离覆盖不到这两样，命令行传参也救不了。启动器只能在游戏退出后把日志**抄**一份
+  进分类的数据目录（`gamelog.salvage_last_log`）—— 游戏自己的「导出日志」读的正是
+  那个位置，不抄回去它会告诉用户「没有日志」。

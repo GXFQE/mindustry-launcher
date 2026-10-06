@@ -297,7 +297,10 @@ python _tools/make_source_zip.py --outdir _history/releases
 # 给「只想双击用」的人 —— 31 MB 的发布包 + 精简更新包（自带 Java）
 python _tools/make_release_zip.py
 python _tools/verify/release_upgrade_check.py   # ★ 老完整包 + 真更新包 == 新完整包？
-python _tools/verify/release_check.py           # ★ 发出去之前必须跑
+python _tools/verify/release_check.py           # ★ 发出去之前必须跑（趁包还在项目根）
+#   ⚠️ 它默认只在**项目根**找 `*发布包*.zip`。如果你已经按归档规约把包改名搬进
+#      `_history/releases/`，就显式指过去：
+#      python _tools/verify/release_check.py --zip _history/releases/MindustryLauncher-v<版本>-win64.zip
 ```
 
 一次发版要传**两个资产**：完整包给新用户，`mindustry-launcher-v<版本>-update.zip`

@@ -92,7 +92,7 @@ def read_version() -> str:
     """从 ``launcher/version.py`` 读版本号。
 
     不 import 那个模块（免得为了一个字符串把那包拖进来），直接按文本抓 ——
-    格式就固定是 ``__version__ = "1.2.3"``（见该文件的模块注释）。
+    格式就固定是 ``__version__ = "1.2.4"``（见该文件的模块注释）。
     """
     text = (ROOT / "launcher" / "version.py").read_text(encoding="utf-8")
     m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.M)

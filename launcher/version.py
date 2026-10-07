@@ -18,7 +18,7 @@
 APP_NAME = "Mindustry 启动器"  # i18n: keep —— 内部标识（日志前缀 / 进程名 / 扩展命名空间）
 # 机器可读的名字：日志、User-Agent、扩展点里用它做命名空间。
 APP_ID = "mindustry-launcher"
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 
 # GitHub API 要求带 User-Agent；下载走的是浏览器式的 UA（见 utils.download_file，
 # 有些镜像站会按 UA 判断），两处别混用。

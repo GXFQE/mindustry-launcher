@@ -212,7 +212,9 @@ REQUIRED = {
         "LANGUAGE_DEFAULT", "LANGUAGE_CODES", "normalize_language",
         "_system_language", "_system_primary_language", "_bootstrap",
     ],
-    "launcher.gui": ["LogMixin"],
+    # gui.py 只做组装；这里钉「新 Mixin 确实进了 MRO」——从组合元组里漏掉
+    # 一个 Mixin，功能会整个消失，而窗口照样能打开。
+    "launcher.gui": ["LogMixin", "MirrorTestMixin"],
     "launcher.updates": [
         "StatusCallback", "downloading", "normalize_mirror",
         # 2026-09-22：改成一个来源一个来源地拉（来源表在 sources.py），
@@ -255,6 +257,48 @@ REQUIRED = {
         # 只放行 exe 自己与 _internal/ —— 「绝不碰用户数据」就落在这两个名字上
         "_is_replaceable", "_safe_rel", "PROTECTED_NAMES",
         "UPDATE_ASSET_SUFFIX", "DISABLE_ENV", "MODE_AUTO",
+    ],
+    # 2026-10-07 新增：GitHub 镜像测速（mirrortest 纯逻辑 + gui_mirror 界面）。
+    # 跟前面那些一样：不在包里 = exe 还是个「设置页没有测速按钮」的旧版本，
+    # 只看「窗口能打开」发现不了。
+    "launcher.mirrortest": [
+        "MirrorResult", "test_mirror", "test_mirrors", "probe_url",
+        "any_stop", "_AnyStop", "sorted_results",
+        "format_size", "format_speed", "format_latency",
+        # 六个状态常量 + 排序档位表：界面文案与结果窗的次序都按它来
+        "STATUS_OK", "STATUS_TIMEOUT", "STATUS_SHORT", "STATUS_HTTP",
+        "STATUS_NET", "STATUS_CANCELED", "_STATUS_RANK",
+        # 测速参数：目标写死老版本 release 资源（各候选同款才可比）、
+        # 样本 1.5 MB、低于 MIN_OK_BYTES 当错误页（几 KB 的 502 页面
+        # 不能算「快」）、单候选总预算、候选上限（清单来自 config.json）
+        "TEST_URL", "SAMPLE_BYTES", "MIN_OK_BYTES", "MIRROR_BUDGET",
+        "SOCKET_TIMEOUT", "MAX_TARGETS", "UNVERIFIED_SSL_CTX",
+    ],
+    "launcher.gui_mirror": [
+        "MirrorTestMixin", "mirror_test_click",
+        # 候选 = 直连 + 下拉清单 + 当前手填（去重保序）；测速走后台线程
+        "_mirror_test_running", "_mirror_test_targets",
+        "_mirror_test_task", "_mirror_test_done",
+        # 结果窗（表格 + 用最快的 / 应用选中）；填回只改内存、不落盘
+        "_mirror_test_show", "_mirror_test_apply",
+        "_mirror_display_name", "_mirror_status_text",
+        # 换语言的整页重建会把按钮换掉 —— 改按钮文字要吞 TclError
+        "_set_mirror_test_button", "mirrortest", "normalize_mirror", "t",
+    ],
+    # ★ 2026-10-07 补漏：这两个**老**模块一直不在上面的清单里。这次加测速
+    # 时才发现的 —— 「逐模块断言」的覆盖面**自己也会漏**，而漏掉一个模块
+    # ＝ 对它完全没有守门（改了没重打，检查照样全绿）。
+    "launcher.gui_backup": [
+        "BackupMixin", "BackupManager", "manage_backups",
+        "_safe_refresh", "_backup_task", "_restore_backup_task",
+        "_fit_dialog", "run_on_gui", "t",
+    ],
+    "launcher.gui_profiles": [
+        "ProfilesMixin", "manage_profiles", "switch_profile",
+        "open_current_save_dir", "_refresh_profile_widgets",
+        "_on_profile_selected",
+        "default_data_dir", "delete_path", "dir_summary", "roaming_dir",
+        "sanitize_profile_name",
     ],
 }
 

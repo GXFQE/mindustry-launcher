@@ -1566,7 +1566,8 @@ def test_gh_auth():
 
     * 令牌只许流向 GitHub 官方域名 —— 用户能自定义版本来源、镜像前缀、
       自更新代理接口，那些都是「别人」的服务器（拿到令牌 = 泄露）；
-    * 开关关掉 = **连探测都不做**（不是「取了放在内存里不用」）。
+    * 开关关掉 = **连探测都不做**（不是「取了放在内存里不用」）；出厂默认
+      就是关（opt-in）—— 坏值退默认、老配置补写都要落 false。
 
     全程不碰真 gh（子进程、凭据都是假对象），只验纯逻辑与接线。
     """
@@ -1689,11 +1690,18 @@ def test_gh_auth():
     finally:
         for lg in _logs:
             lg.removeHandler(_h)
-    check("坏开关值退默认（默认开着）", cm.get("use_gh_auth") is True,
+    check("坏开关值退默认（默认关着）", cm.get("use_gh_auth") is False,
           repr(cm.get("use_gh_auth")))
     check("★ 退默认的告警点名了配置键 use_gh_auth",
           any("use_gh_auth" in m for m in _msgs), str(_msgs))
-    check("config 构造时把开关注入 ghauth", ghauth._enabled is True)
+    check("坏值退默认关 -> 构造时 ghauth 也关", ghauth._enabled is False)
+
+    # 反向对照：配置里明确写着 true 时，构造必须真的把 ghauth 打开 ——
+    # 只钉「默认关」不够，开关的另一头也得钉住。
+    f1b = sb / "c1b.json"
+    f1b.write_text(json.dumps({"use_gh_auth": True}), encoding="utf-8")
+    ConfigManager(f1b)
+    check("配置里开着 -> 构造时 ghauth 也开", ghauth._enabled is True)
 
     f2 = sb / "c2.json"
     f2.write_text(json.dumps({"use_gh_auth": False}), encoding="utf-8")
@@ -1708,8 +1716,8 @@ def test_gh_auth():
     f3.write_text(json.dumps({"auto_update": False}), encoding="utf-8")
     ConfigManager(f3)
     saved3 = json.loads(f3.read_text(encoding="utf-8"))
-    check("老配置自动补上 use_gh_auth（默认开着，用户看得见）",
-          saved3.get("use_gh_auth") is True
+    check("老配置自动补上 use_gh_auth（默认关着）",
+          saved3.get("use_gh_auth") is False
           and saved3.get("auto_update") is False, str(saved3)[:120])
 
     # 恢复现场：后面的测试不该继承这一层的模块级状态。

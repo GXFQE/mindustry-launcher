@@ -13,8 +13,8 @@ CI、集成工具用的就是它）。令牌只进**内存**（本模块的缓�
 1. 只有 GitHub **官方域名**（见 ``_GITHUB_HOSTS``，精确匹配）才配带上
    令牌。用户能自定义版本来源、镜像前缀、自更新接口 —— 那些请求绝不能
    看到令牌（一个恶意的「镜像站」拿到带 repo 权限的令牌就全完了）。
-2. 开关关闭时（``config.json`` 的 ``use_gh_auth``），请求路径**连探测都
-   不做** —— 不是「取回来不用」，而是根本不碰用户凭据。
+2. 开关关闭时（``config.json`` 的 ``use_gh_auth``，**默认关** = opt-in），
+   请求路径**连探测都不做** —— 不是「取回来不用」，而是根本不碰用户凭据。
 
 **本模块只依赖标准库**：它会被 ``utils.download_file`` 使用，而 utils
 位于依赖链最底层（utils → config → …），所以这里不许 import 任何
@@ -53,9 +53,10 @@ _GITHUB_HOSTS = frozenset({
 
 _lock = threading.RLock()
 
-# 开关：由配置层注入（见 set_enabled）。这里的初值只是「配置加载之前就被
-# 某个请求用到」时的兜底 —— ConfigManager 一构造就会调 set_enabled 覆盖它。
-_enabled = True
+# 开关：由配置层注入（见 set_enabled）。这里的初值 = **出厂默认（关）** ——
+# 配置加载前万一被某个请求先用到，也只会「什么都不做」，不会去碰用户凭据。
+# ConfigManager 一构造就会调 set_enabled 覆盖它。
+_enabled = False
 
 # 探测只做一次（成功、失败都算）：失败（没装 gh / 没登录）也要记住，
 # 否则每个请求都起一次子进程白等几百毫秒。

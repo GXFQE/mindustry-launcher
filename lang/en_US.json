@@ -50,7 +50,7 @@
   "settings.hint.jre_path": "Either the JRE or the JDK root works (it must contain bin\\java.exe); \"jre\" means the folder next to the launcher",
   "settings.hint.mirror": "Prefixed to download URLs for acceleration; empty = direct GitHub. If one mirror fails, the next is tried",
   "settings.hint.mirror_test": "Click Speed test to measure each candidate, then pick the fastest (the result goes into the box above)",
-  "settings.hint.gh_auth": "When GitHub CLI (gh) is installed and logged in, GitHub requests get authenticated: API quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in memory only; mirrors and custom sources never see it.",
+  "settings.hint.gh_auth": "Off by default. When ticked and GitHub CLI (gh) is installed and logged in, GitHub requests get authenticated: API quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in memory only; mirrors and custom sources never see it.",
   "settings.hint.extra_vm": "Placed before -cp, e.g. -Xmx4G; space-separated - wrap an item in double quotes if it contains spaces",
   "settings.hint.extra_prog": "Passed to the game after the main class (rarely needed; mainly for troubleshooting)",
   "settings.hint.max_logs": "← the oldest are dropped beyond this (takes effect on the next launch)",

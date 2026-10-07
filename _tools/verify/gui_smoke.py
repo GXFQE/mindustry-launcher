@@ -147,9 +147,9 @@ def make_sandbox() -> Path:
         # 旧的镜像开关：已废弃，留着验证「保存后不会再被写回配置」
         "use_mirror": True,
         "github_mirror": "",            # 沙箱不下载，直连即可
-        # gh 认证：沙箱里显式关掉（默认是开的）—— 构建设置页时不起 gh
-        # 子进程去探测；下面 [2e] 再单独测「勾上 → 探测 → 回填」这条链。
-        "use_gh_auth": False,
+        # gh 认证：沙箱里**不写**这个键 —— 顺带验证「默认关着」这条路径
+        # （构建设置页时不起 gh 子进程去探测）；下面 [2e] 再单独测
+        # 「勾上 → 探测 → 回填」这条链。
         # 候选镜像站也是配置项（设置页下拉框读它）
         "github_mirror_presets": list(SMOKE_MIRROR_PRESETS),
         "auto_update": False,           # 别在这里发网络请求

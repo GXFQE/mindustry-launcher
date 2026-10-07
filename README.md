@@ -69,10 +69,10 @@ launcher.log    the launcher's own log — look here first when something goes w
   being tested**, so it never looks stuck); **Use fastest** fills the winner back
   into the setting. Line quality varies by ISP and region, so the order of the
   dropdown means nothing.
-- **Use GitHub CLI authentication** — if GitHub CLI (`gh`) is installed and logged
-  in, tick it and GitHub requests get authenticated: the API quota rises from
-  60/hour (shared per IP) to 5000/hour. The token stays in memory and is never
-  written to disk; mirrors and custom sources never see it.
+- **Use GitHub CLI authentication** — off by default. If GitHub CLI (`gh`) is
+  installed and logged in, tick it and GitHub requests get authenticated: the API
+  quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in memory
+  and is never written to disk; mirrors and custom sources never see it.
 - **Delete permanently** — off by default, so deletions go to the **recycle bin** and can
   be restored. Turn it on and they are gone for good.
 

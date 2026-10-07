@@ -50,7 +50,7 @@
   "settings.hint.jre_path": "填 JRE 或 JDK 的根目录都行（里面要有 bin\\java.exe）；只写 jre 表示启动器旁边那个",
   "settings.hint.mirror": "下载 jar 时拼在地址前做加速；留空＝直连 GitHub，这个源拉不动会自动换下一个",
   "settings.hint.mirror_test": "点「测速」实测各候选的下载速度，再选最快的那个（结果会填进上面的框）",
-  "settings.hint.gh_auth": "本机装了并登录 GitHub CLI（gh）时，GitHub 请求会带上认证：API 额度从 60 次/时（按出口 IP 共享）提高到 5000 次/时。令牌只放在内存里，不写入文件；镜像站与自定义来源收不到它。",
+  "settings.hint.gh_auth": "默认关闭；勾选后，本机装了并登录 GitHub CLI（gh）时 GitHub 请求会带上认证：API 额度从 60 次/时（按出口 IP 共享）提高到 5000 次/时。令牌只放在内存里，不写入文件；镜像站与自定义来源收不到它。",
   "settings.hint.extra_vm": "加在 -cp 之前，如 -Xmx4G；空格分隔，含空格的项用英文双引号包住",
   "settings.hint.extra_prog": "传给游戏本体，加在主类之后（一般用不到，排查问题时才填）",
   "settings.hint.max_logs": "← 超出后从最旧的开始丢（下次启动游戏生效）",

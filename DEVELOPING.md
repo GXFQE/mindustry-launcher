@@ -61,7 +61,7 @@ LICENSE                 Full GNU GPL-3.0 text
 ## Development workflow
 
 ```bash
-python _tools/verify/code_regression.py          # 1. Run after any code change (406 checks)
+python _tools/verify/code_regression.py          # 1. Run after any code change (407 checks)
 python _tools/verify/i18n_check.py               # 1b. After touching strings/features: language-pack and "no hardcoded strings" gate (35 checks)
 python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (132 checks, no game launched)
 python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/languages: really build windows and switch language (29 checks)

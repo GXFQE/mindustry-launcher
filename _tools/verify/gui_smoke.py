@@ -383,18 +383,55 @@ def main() -> int:
         check("★ 设置页里的输入框 / 分割线都撑到了右边（不然空一整列）",
               not bad, f"{bad[:4]}")
 
-        # 反向对照：把镜像下拉框缩回单列，守门必须当场报出来 —— 不然这条
-        # 断言可能只是「一个控件都没扫到」的空转。
-        mirror = next(
-            iter(walk_by_kind(app.settings_frame, (ttk.Combobox,))), None
-        )
-        if mirror is not None:
-            mirror.grid_configure(columnspan=1)
+        # 反向对照：挑一个**本该撑满**的下拉框（第 1 列、跨两列、右边没有按钮）
+        # 缩回单列，守门必须当场报出来 —— 不然这条断言可能只是「一个控件都
+        # 没扫到」的空转。
+        # ★ 按**几何条件**挑，不按「第几个」：这里原来直接取第一个 Combobox，
+        #   注释写的是镜像框、实际早指到「启动器更新」上；而 2026-10-07 镜像行
+        #   右边加了「测速」按钮（它成了「该让位」的行），拿它做对照会白缩
+        #   一下、什么都不报 —— 对照必须自己挑对靶子。
+        def has_sibling_to_the_right(w) -> bool:
+            """同一行、更靠右的列上还有控件（那种行「让位」是应该的）。"""
+            try:
+                row = int(w.grid_info()["row"])
+                sibs = w.master.winfo_children()
+            except (tk.TclError, KeyError):
+                return True                     # 拿不准就当有 —— 别挑它
+            for s in sibs:
+                if s is w:
+                    continue
+                try:
+                    si = s.grid_info()
+                except tk.TclError:
+                    continue
+                if si and int(si["row"]) == row and int(si["column"]) > 1:
+                    return True
+            return False
+
+        def shift_eligible():
+            """本该撑满的下拉框：第 1 列 + 跨列 + 右边没按钮。"""
+            for c in walk_by_kind(app.settings_frame, (ttk.Combobox,)):
+                try:
+                    info = c.grid_info()
+                except tk.TclError:
+                    continue
+                if not info or int(info["column"]) != 1 \
+                        or int(info["columnspan"]) < 2:
+                    continue
+                if not has_sibling_to_the_right(c):
+                    return c
+            return None
+
+        victim = shift_eligible()
+        check("[对照] 设置页里找得到「本该撑满」的下拉框（对照有靶子）",
+              victim is not None)
+        if victim is not None:
+            victim.grid_configure(columnspan=1)
             app.root.update()
             caught = short_rows()
             check("[对照] 缩回单列后守门确实会报（断言打到了现场）",
                   bool(caught), f"{caught[:2]}")
-            mirror.grid_configure(columnspan=2)
+            victim.grid_configure(columnspan=2)
             app.root.update()
             check("还原成跨两列后又不报了", not short_rows())
 
@@ -835,6 +872,93 @@ def main() -> int:
             check("_is_in_settings 往上碰到别的窗口就停（下拉列表/弹窗都算）",
                   not app._is_in_settings(probe))
             probe.destroy()
+
+        print("\n[2d] GitHub 镜像测速：按钮 → 后台线程 → 结果窗 → 填回下拉框")
+        # ★ 真发网络请求的测试不进冒烟（慢、不稳定）——把测速核心换成假的，
+        #   只验「界面这一层」的接线：按钮在不在、点得动、结果窗列了谁、
+        #   「用最快的」把哪个地址填回了下拉框。测速逻辑本身在
+        #   code_regression [12b] 里用本地 HTTP 服务真跑。
+        import launcher.mirrortest as MT
+        real_test_mirrors = MT.test_mirrors
+        fake_speed = {
+            SMOKE_MIRROR_PRESETS[0]: 5_000_000.0,
+            SMOKE_MIRROR_PRESETS[1]: 300_000.0,
+            "": 60_000.0,
+        }
+
+        def fake_test_mirrors(prefixes, *, on_result=None, stop_event=None,
+                              **kwargs):
+            out = []
+            for p in prefixes:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                r = MT.MirrorResult(
+                    prefix=p, status=MT.STATUS_OK,
+                    latency_ms=20.0, speed_bps=fake_speed.get(p, 1000.0),
+                    bytes_read=MT.SAMPLE_BYTES,
+                )
+                out.append(r)
+                if on_result is not None:
+                    on_result(r)
+            return out
+
+        MT.test_mirrors = fake_test_mirrors
+        test_btn = find_widget(app.settings_frame, "测速")
+        check("设置页里有「测速」按钮", test_btn is not None)
+        picked: dict[str, object] = {"done": False, "attempts": 0}
+
+        def probe_dialog() -> None:
+            """结果窗弹出后（它在自己的嵌套事件循环里）做检查再收尾。
+
+            模态窗一开，pump 的 update() 就阻塞在里面 —— 这正是不用
+            「等一下再查」而用 after 回调的原因：它会在嵌套循环里被触发。
+            """
+            win = getattr(app, "_mirror_test_win", None)
+            if win is None or not win.winfo_exists():
+                picked["attempts"] = int(picked["attempts"]) + 1
+                if int(picked["attempts"]) < 30:
+                    app.root.after(100, probe_dialog)   # 还没弹出来，再等
+                return
+            tree = find_by_kind(win, ttk.Treeview)
+            if tree is not None:
+                rows = tree.get_children()
+                picked["rows"] = [tree.set(i, "mirror") for i in rows]
+            fastest_btn = find_widget(win, "用最快的")
+            picked["has_fastest"] = fastest_btn is not None
+            if fastest_btn is not None:
+                fastest_btn.invoke()        # 填回下拉框 + 关窗
+            else:
+                win.destroy()               # 别把 pump 永远堵在模态循环里
+            picked["done"] = True
+
+        if test_btn is not None:
+            app.root.after(150, probe_dialog)
+            test_btn.invoke()
+            # pump 会「卡」在结果窗的嵌套事件循环里，probe_dialog 在里面
+            # 把窗关掉之后它才返回 —— 模态对话框本来就这么工作。
+            pump(app, 8.0)
+        check("点「测速」后结果窗弹了出来（探针跑完了）",
+              picked["done"] is True, str(picked))
+        check("结果窗里是一张按速度排序的表（最快在最前）",
+              picked.get("rows") == [SMOKE_MIRROR_PRESETS[0],
+                                     SMOKE_MIRROR_PRESETS[1],
+                                     "（直连 GitHub）"],
+              str(picked.get("rows")))
+        check("结果窗里有「用最快的」按钮", picked.get("has_fastest") is True)
+        check("★ 「用最快的」把最快的镜像填进了下拉框（还没保存）",
+              app.github_mirror_var.get() == SMOKE_MIRROR_PRESETS[0],
+              repr(app.github_mirror_var.get()))
+        check("提示行说清了「填进去了、点保存才生效」",
+              "已填入" in app.mirror_test_var.get(),
+              app.mirror_test_var.get())
+        check("按钮从「取消」恢复成「测速」（不会卡在测速中）",
+              test_btn is not None
+              and str(test_btn.cget("text")) == "测速",
+              str(test_btn.cget("text")) if test_btn is not None else "None")
+        MT.test_mirrors = real_test_mirrors
+        app.github_mirror_var.set("")
+        app.mirror_test_var.set("")
+        app.root.update()
 
         # 主面板的「当前存档」：滚一下也不许换分类
         app.show_main()

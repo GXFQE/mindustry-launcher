@@ -510,20 +510,38 @@ class MainMixin:
         # 可编辑的下拉框：预设不够用就直接把地址敲进去。候选清单取自
         # config.json 的 github_mirror_presets（想加自己的镜像站改那份文件，
         # 改完重启启动器生效）—— 界面只读它，不往回写。
-        # ★ columnspan=2：这一行右边没有按钮（列宽是全表共享的，第 2 列被
-        #   Java 那两个按钮占着），跨满两列才不留空档 —— 否则输入框右边平白
-        #   空出一整列按钮的宽度（量过：差 183 px）。
+        # ★ 这一行右边**站着「测速」按钮**，所以下拉框只占第 1 列（跟 Java
+        #   那行一个格局）：按钮在第 2 列，让位是应该的（gui_smoke 的
+        #   short_rows 守门专门放过这种行）。
         ttk.Combobox(
             glob,
             textvariable=self.github_mirror_var,
             values=list(self.config.get("github_mirror_presets")),
         ).grid(
-            row=row, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=3
+            row=row, column=1, sticky=tk.EW, padx=5, pady=3
         )
+        # 「测速」＝对每个候选真下一小段，按速度排（见 gui_mirror / mirrortest）。
+        # 测速期间按钮变成「取消」，进度写在下面那行提示里。
+        self.mirror_test_btn = ttk.Button(
+            glob,
+            text=t("settings.mirror_test"),
+            command=self.mirror_test_click,
+        )
+        self.mirror_test_btn.grid(row=row, column=2, sticky=tk.W)
         row += 1
         _auto_wrap_hint(ttk.Label(
             glob,
             text=t("settings.hint.mirror"),
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
+        row += 1
+        # 测速的进度 / 结论（平时是一句「怎么用」的提示）。★ 文案会变，
+        # 但也得包 _auto_wrap_hint —— 换个语言、窗口拉窄时同样要能折行。
+        self.mirror_test_var = tk.StringVar(value=t("settings.hint.mirror_test"))
+        _auto_wrap_hint(ttk.Label(
+            glob,
+            textvariable=self.mirror_test_var,
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)

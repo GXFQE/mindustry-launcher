@@ -89,6 +89,12 @@ class CoreMixin:
         self._log_win = None            # 运行日志窗口（只允许开一个）
         self._log_poll_id: str | None = None
         self._log_shown_seq = 0
+        # GitHub 镜像测速（见 gui_mirror）：结果窗口、后台线程、取消信号。
+        # 「取消」是每轮新建的 Event —— 上一轮 set 过的不能带到下一轮，
+        # 否则新线程一开跑就以为已经被取消。
+        self._mirror_test_win = None
+        self._mirror_test_thread: threading.Thread | None = None
+        self._mirror_test_cancel = threading.Event()
         # 「正在启动游戏」的牌子。启动时要拼一个 100MB+ 的 jar，
         # 那是整套流程里最吃磁盘的一步；后台 GC 要扫 3 万多个对象，
         # 跟它抢盘只会两头都慢（实测并发时读对象 1.3s → 1.9s）。

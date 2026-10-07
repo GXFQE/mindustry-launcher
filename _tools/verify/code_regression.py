@@ -38,14 +38,20 @@
 20) 版本号只有一处（launcher/version.py，包外暴露的与它一致）
 21) **_paths 的懒解析**：import 时不去找运行时目录（刚 clone 不会 import 就炸）；
     MDT_RUNTIME_DIR 可覆盖；找不到时 required=False 给 None、True 给可读报错
+22) **GitHub 镜像测速**（12b）：探针的每条状态路径都用本地 HTTP 服务真跑
+    （读满 / 太慢 / 错误页 / 404 / 拒连 / 取消）；批量测速的候选上限与中途
+    取消；结果的排序与格式化 —— 尤其是不许拿几 KB 的错误页当"最快"
 
 项数见末尾统计（改完 launcher/ 就该跑一遍）。
 """
 import ast
+import http.server
 import json
 import logging
 import os
 import queue
+import re
+import socketserver
 import sys
 import tempfile
 import threading
@@ -88,17 +94,43 @@ def check(name, ok, detail=""):
 
 
 # ---------------------------------------------------------------- 1. 正确性
+def _newest_manifest(prefix: str) -> tuple[str, Path] | None:
+    """挑运行时目录里**实际存在**的、最新的 ``<prefix>_<版本>.json`` 清单。
+
+    ★ 别写死版本号（原来钉的 ``MindustryX_2026.09.X37`` 就翻过车）：运行时
+    目录是**用户的数据**，版本会升级、旧的会被清理 —— 写死一个名字，等它
+    被删掉，整个回归一进门就 FileNotFound，看着像代码坏了，其实只是数据
+    变了。返回 ``(raw_version, 清单路径)``；一个都没有则 None。
+    """
+    best: tuple[tuple[int, ...], str, Path] | None = None
+    for path in (VERSIONS / "manifests").glob(f"{prefix}_*.json"):
+        raw = path.stem[len(prefix) + 1:]
+        nums = tuple(int(x) for x in re.findall(r"\d+", raw))
+        key = (nums or (0,), raw, path)
+        if best is None or key[0] > best[0]:
+            best = key
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
 def test_jar_content_matches_cas():
     print("\n[1] jar 条目内容 vs CAS 对象（真实数据全量核对）")
     # ⚠️ 真实数据在**运行时目录**里（拆分后不在代码仓库中），由 _paths 定位
     V = VERSIONS
     vm = S.VersionManager(S.CASStore(V), V / "manifests")
-    manifest = json.loads(
-        (V / "manifests" / "MindustryX_2026.09.X37.json").read_text()
-    )
+    picked = _newest_manifest("MindustryX") or _newest_manifest("Mindustry")
+    if picked is None:
+        check("运行时目录里有可核对的真实版本清单", False,
+              f"{V / 'manifests'} 里没有任何清单")
+        return
+    raw_version, manifest_path = picked
+    vtype = manifest_path.stem[: -len(raw_version) - 1]
+    print(f"      （核对 {vtype} {raw_version}）")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     files = manifest["files"]
     out = Path(tempfile.mktemp(suffix=".jar"))
-    vm.build_runtime_jar("MindustryX", "2026.09.X37", out)
+    vm.build_runtime_jar(vtype, raw_version, out)
 
     with zipfile.ZipFile(out) as zf:
         names = zf.namelist()
@@ -268,11 +300,19 @@ def test_manifest_digest():
     print("\n[4] 清单指纹（预热结果的有效性判据）")
     V = VERSIONS
     vm = S.VersionManager(S.CASStore(V), V / "manifests")
-    d1 = vm.manifest_digest("MindustryX", "2026.09.X37")
-    d2 = vm.manifest_digest("MindustryX", "2026.09.X37")
+    # 版本号同样不许写死（见 _newest_manifest）：拿目录里实际有的两种清单对比
+    a = _newest_manifest("MindustryX")
+    b = _newest_manifest("Mindustry")
+    if a is None or b is None:
+        check("运行时目录里有 Mindustry / MindustryX 两种清单可对比", False,
+              f"X={a}，本体={b}")
+        return
+    d1 = vm.manifest_digest("MindustryX", a[0])
+    d2 = vm.manifest_digest("MindustryX", a[0])
     check("同一清单两次结果相同", d1 == d2 and len(d1) == 64, d1[:16])
-    d3 = vm.manifest_digest("Mindustry", "160.3")
-    check("不同版本结果不同", d1 != d3, d3[:16])
+    d3 = vm.manifest_digest("Mindustry", b[0])
+    check("不同版本结果不同（两种来源各取一个）",
+          d1 != d3 and len(d1) == 64 and len(d3) == 64, d3[:16])
     check("清单不存在返回空串（不抛异常）",
           vm.manifest_digest("Nope", "999") == "")
 
@@ -507,6 +547,7 @@ def main():
     test_game_log()
     test_output_encoding_end_to_end()
     test_mirror_and_log_keep()
+    test_mirror_speed_test()
     test_lock_scope()
     test_wheel_routing()
     test_settings_flow_and_autoclose()
@@ -1290,6 +1331,194 @@ def test_mirror_and_log_keep():
           str(saved3.get("github_mirror_presets")))
     check("补写不会动用户已有的值", saved3.get("auto_update") is False,
           str(saved3.get("auto_update")))
+
+
+# --------------------- 12b. GitHub 镜像测速（本地服务，离线，确定性）
+# 靶场路由：
+#   /blob  正常文件（600 KB，读得快）
+#   /tiny  小得离谱（100 KB）—— 模拟镜像返回的错误页
+#   /slow  磨洋工（每 50 ms 吐 8 KB）—— 触发预算超时
+#   其它   404
+_BLOB = b"x" * 600_000
+_TINY = b"z" * 100_000
+
+
+class _ProbeHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+
+    def log_message(self, *args):                       # 别往 stderr 刷
+        pass
+
+    def do_GET(self):
+        if self.path == "/blob":
+            payload = _BLOB
+        elif self.path == "/tiny":
+            payload = _TINY
+        elif self.path == "/slow":
+            self.send_response(200)
+            self.send_header("Content-Length", str(10_000_000))
+            self.end_headers()
+            try:
+                for _ in range(200):
+                    self.wfile.write(b"y" * 8192)
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except OSError:
+                pass            # 客户端到预算就断开（这正是被测行为）
+            return
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def _start_probe_server():
+    """给测速探针起一个本地靶场（离线、毫秒级）。
+
+    回归里只允许确定性 —— 真镜像既慢又不稳定，不能拿来当测试靶子。
+    """
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _ProbeHandler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/"
+
+
+def test_mirror_speed_test():
+    """镜像是加速手段，测速只是辅助 —— 这一层的底线是「绝不许崩、不许骗人」。
+
+    用**本地 HTTP 服务**把每条路径都真跑一遍：能不能读满样本、太慢时算不算
+    速度、错误页会不会被当成「最快」、404 / 拒连 / 取消各是什么状态。
+    别拿真镜像测 —— 那既慢又不稳定，回归里只允许确定性。
+    """
+    print("\n[12b] GitHub 镜像测速（本地 HTTP 服务，离线）")
+    from launcher import mirrortest as MT
+
+    check("测速目标是 GitHub 的老版本 release 资源（挑过去时，不会被删）",
+          MT.TEST_URL.startswith("https://github.com/")
+          and "/releases/download/" in MT.TEST_URL, MT.TEST_URL)
+    check("默认预算不至于让慢镜像把整轮拖成分钟级",
+          0 < MT.MIRROR_BUDGET <= 20, str(MT.MIRROR_BUDGET))
+    check("样本量在「够测速度」和「不浪费流量」之间",
+          256_000 <= MT.SAMPLE_BYTES <= 8_000_000, str(MT.SAMPLE_BYTES))
+    check("★ 错误页阈值远小于样本（几 KB 的错误页不许被当成快）",
+          MT.MIN_OK_BYTES < MT.SAMPLE_BYTES,
+          f"{MT.MIN_OK_BYTES} < {MT.SAMPLE_BYTES}")
+
+    # 格式化：界面直接拿它显示，别出现「0.0 KB/s」这种
+    check("没有数据的速度显示成「—」",
+          MT.format_speed(None) == "—" and MT.format_speed(0) == "—",
+          f"{MT.format_speed(None)!r}")
+    check("速度按量级换单位",
+          MT.format_speed(500_000) == "488 KB/s"
+          and MT.format_speed(3_200_000) == "3.1 MB/s",
+          f"{MT.format_speed(500_000)} / {MT.format_speed(3_200_000)}")
+    check("延迟超 1 秒换成秒",
+          MT.format_latency(1850) == "1.9 s"
+          and MT.format_latency(142.4) == "142 ms",
+          f"{MT.format_latency(1850)} / {MT.format_latency(142.4)}")
+    check("空前缀＝直连（原样返回目标地址）",
+          MT.probe_url("") == MT.TEST_URL
+          and MT.probe_url("https://a.example/", "X") == "https://a.example/X")
+
+    srv, base = _start_probe_server()
+    try:
+        # ---- 正常：读满样本，速度和延迟都要有数 ----
+        r = MT.test_mirror(base, test_url="blob", sample_bytes=300_000,
+                           budget=5.0)
+        check("读满样本 → ok", r.status == MT.STATUS_OK and r.ok, str(r))
+        check("ok 的结果带延迟和速度（界面要显示的就是这两个）",
+              r.latency_ms is not None and r.latency_ms >= 0
+              and r.speed_bps is not None and r.speed_bps > 0, str(r))
+        check("读到的字节数不少于样本（按 64 KB 块读，允许多读一块）",
+              300_000 <= r.bytes_read <= 300_000 + 64 * 1024,
+              f"{r.bytes_read}")
+
+        # ---- 文件比样本小但「够量」：仍算可用 ----
+        r = MT.test_mirror(base, test_url="blob", sample_bytes=2_000_000)
+        check("文件比样本小但够量 → 仍算 ok",
+              r.status == MT.STATUS_OK and r.bytes_read == len(_BLOB),
+              f"{r.status} bytes={r.bytes_read}")
+
+        # ---- 错误页：提前结束且量太少 → 绝不能算「快」 ----
+        r = MT.test_mirror(base, test_url="tiny", sample_bytes=2_000_000)
+        check("★ 小得离谱的响应（像错误页）不算 ok",
+              r.status == MT.STATUS_SHORT, f"{r.status} bytes={r.bytes_read}")
+
+        # ---- 太慢：预算用尽，有部分数据就照样给速度 ----
+        r = MT.test_mirror(base, test_url="slow", sample_bytes=5_000_000,
+                           budget=0.6)
+        check("预算用尽 → timeout（不是 ok）",
+              r.status == MT.STATUS_TIMEOUT, str(r))
+        check("timeout 时已读到的部分照样算速度（否则界面只能显示空）",
+              r.speed_bps is not None and r.speed_bps > 0
+              and 0 < r.bytes_read < 5_000_000, str(r))
+
+        # ---- HTTP 错误 / 连不上 ----
+        r = MT.test_mirror(base, test_url="missing", sample_bytes=300_000)
+        check("404 → http 状态（带错误码）",
+              r.status == MT.STATUS_HTTP and r.http_code == 404, str(r))
+        r = MT.test_mirror("http://127.0.0.1:1/", test_url="blob",
+                           sample_bytes=300_000)
+        check("拒绝连接 → net 状态", r.status == MT.STATUS_NET, str(r))
+
+        # ---- 取消：预先 set 的停止信号必须当场生效，一个字节都不读 ----
+        ev = threading.Event()
+        ev.set()
+        r = MT.test_mirror(base, test_url="blob", stop_event=ev)
+        check("已取消 → 连请求都不发",
+              r.status == MT.STATUS_CANCELED and r.bytes_read == 0, str(r))
+
+        # ---- any_stop：合成的信号，任一生效即生效 ----
+        a, b = threading.Event(), threading.Event()
+        both = MT.any_stop(a, b)
+        check("any_stop：一开始不停", not both.is_set())
+        b.set()
+        check("any_stop：任一 set 都算停", both.is_set())
+
+        # ---- 批量：进度回调 + 候选上限 ----
+        seen: list = []
+        results = MT.test_mirrors(
+            [base] * 3, test_url="blob", sample_bytes=64 * 1024,
+            on_result=seen.append,
+        )
+        check("批量测速每个候选都有一条结果、进度回调次数一致",
+              len(results) == 3 and len(seen) == 3,
+              f"{len(results)}/{len(seen)}")
+        many = MT.test_mirrors([base] * (MT.MAX_TARGETS + 3),
+                               test_url="blob", sample_bytes=64 * 1024)
+        check(f"候选再多也只测 {MT.MAX_TARGETS} 个（清单是配置项，可写到 20）",
+              len(many) == MT.MAX_TARGETS, f"{len(many)}")
+
+        # ---- 中途取消：只交已测完的那部分 ----
+        ev2 = threading.Event()
+
+        def cancel_after_first(_r):
+            ev2.set()       # 第一个测完立刻取消 —— 后面的不该再发请求
+
+        results = MT.test_mirrors(
+            [base] * 4, test_url="blob", sample_bytes=64 * 1024,
+            on_result=cancel_after_first, stop_event=ev2,
+        )
+        check("中途取消：只交已测完的那部分（不再发下一个请求）",
+              len(results) == 1, f"{len(results)}")
+
+        # ---- 排序：可用的在前且按速度降序；不可用的垫底 ----
+        made = [
+            MT.MirrorResult("slow", MT.STATUS_OK, speed_bps=100.0),
+            MT.MirrorResult("fast", MT.STATUS_OK, speed_bps=900.0),
+            MT.MirrorResult("dead", MT.STATUS_NET),
+            MT.MirrorResult("404", MT.STATUS_HTTP, http_code=404),
+            MT.MirrorResult("half", MT.STATUS_TIMEOUT, speed_bps=50.0),
+        ]
+        order = [x.prefix for x in MT.sorted_results(made)]
+        check("★ 排序：ok 按速度降序在最前，失败的垫底",
+              order == ["fast", "slow", "half", "404", "dead"], str(order))
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 # ------------------------------------- 13. 锁的作用域（持锁弹窗 = 自锁）

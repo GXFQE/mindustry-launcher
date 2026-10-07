@@ -7,6 +7,7 @@ from .gui_game import GameMixin
 from .gui_backup import BackupMixin
 from .gui_dialog import DialogMixin
 from .gui_log import LogMixin
+from .gui_mirror import MirrorTestMixin
 from .gui_versions import VersionsMixin
 from .gui_updates import UpdatesMixin
 
@@ -19,6 +20,7 @@ class MindustryLauncher(
     BackupMixin,
     DialogMixin,
     LogMixin,
+    MirrorTestMixin,
     VersionsMixin,
     UpdatesMixin,
 ):

@@ -12,11 +12,17 @@
     设置页只有一个出口（见 gui_main 的 save_settings / save_and_return）。
   * 结果窗同时只能开一个；测速期间按钮变成「取消」，点它就收手
     （每个候选最多多等一次 socket 超时，见 mirrortest.SOCKET_TIMEOUT）。
+
+进度显示（设置页那一条 + 进度条）：条的最大刻度 = 候选数，读数 = 已测完
++ 当前候选的字节比例；文字带「已用 n 秒」的秒表（ticker 每 250 ms 一跳），
+单个候选卡在「连接 / 等首字节」时也不会看起来像死掉。数据源是 mirrortest
+的 ``on_progress`` 回调，本层只负责显示与收放。
 """
 from __future__ import annotations
 
 import logging
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -25,6 +31,9 @@ from .config import normalize_mirror
 from .i18n import t
 
 logger = logging.getLogger(__name__)
+
+# 进度文字里「已用 n 秒」的刷新间隔：250 ms —— 够看出在跳，又不至于刷屏。
+_PROGRESS_TICK_MS = 250
 
 
 class MirrorTestMixin:
@@ -35,22 +44,31 @@ class MirrorTestMixin:
         if self._mirror_test_running():
             logger.info("用户点了「取消」，正在收手中")
             self._mirror_test_cancel.set()
-            self.mirror_test_var.set(t("mirror_test.canceling"))
+            # 提示行切成「正在取消…」。旗标先立住：ticker 每 250 ms 刷新
+            # 时先看它，不会把文案抢回「正在测速」。
+            self._mirror_test_canceling = True
+            self._mirror_test_refresh_progress()
             return
         targets = self._mirror_test_targets()
         total = min(len(targets), mirrortest.MAX_TARGETS)
         # 每一轮都是新的取消信号：上一轮 set 过的 Event 不能带过来
         #（否则新线程一进循环就判「已取消」，秒退）。
         self._mirror_test_cancel = threading.Event()
+        # 进度显示的初态：0/总数、还没有「当前候选」
+        self._mirror_test_total = total
+        self._mirror_test_finished = 0
+        self._mirror_test_cur_prefix = None
+        self._mirror_test_cur_bytes = 0
+        self._mirror_test_canceling = False
+        self._set_mirror_test_button(t("common.cancel"))
+        self._mirror_test_refresh_progress()     # 提示行 =「正在测速…（0/N）」
+        self._mirror_test_set_progress_visible(True)
         self._mirror_test_thread = threading.Thread(
             target=self._mirror_test_task,
             args=(targets, total),
             daemon=True,
         )
-        self._set_mirror_test_button(t("common.cancel"))
-        self.mirror_test_var.set(
-            t("mirror_test.running", done=0, total=total)
-        )
+        self._mirror_test_start_ticker()
         self._mirror_test_thread.start()
 
     def _mirror_test_running(self) -> bool:
@@ -87,16 +105,24 @@ class MirrorTestMixin:
             nonlocal done
             done += 1
             n = done
-            self.run_on_gui(lambda: self.mirror_test_var.set(
-                t("mirror_test.running", done=n, total=total)
-            ))
+            self.run_on_gui(lambda: self._mirror_test_progress_result(thread, n))
+
+        def on_progress(prefix: str, nbytes: int) -> None:
+            # 每个候选先来一条 0（开测），之后按块报 —— 界面靠它把进度条
+            # 画细、把「已用时间」的秒表切到这个候选上。
+            self.run_on_gui(
+                lambda: self._mirror_test_progress_bytes(thread, prefix, nbytes)
+            )
 
         # 两个停止信号合二为一：用户点了「取消」，或者启动器要关了。
         stop = mirrortest.any_stop(self.stop_event, self._mirror_test_cancel)
         error = ""
         try:
             results = mirrortest.test_mirrors(
-                targets, on_result=on_result, stop_event=stop
+                targets,
+                on_result=on_result,
+                on_progress=on_progress,
+                stop_event=stop,
             )
         except Exception as e:                                  # noqa: BLE001
             # mirrortest 对外承诺不抛；真抛了也只当「这一轮没结果」，
@@ -116,12 +142,19 @@ class MirrorTestMixin:
         canceled: bool,
         error: str,
     ) -> None:
-        """回到 GUI 线程收尾：恢复按钮、写提示行、弹结果窗。"""
+        """回到 GUI 线程收尾：收进度、恢复按钮、写提示行、弹结果窗。"""
         if thread is not self._mirror_test_thread:
             # 上一轮的结果姗姗来迟（用户取消后立刻又测了一轮）——
             # 别拿旧数据盖掉新一轮的进度显示。
             logger.info("收到过期的测速结果，已丢弃")
             return
+        # 先把进度显示收干净（ticker 停、条收回、旗标复位）再写结论 ——
+        # 「正在测速」文案和进度条都不该在结果窗弹出后还挂着。
+        self._mirror_test_stop_ticker()
+        self._mirror_test_canceling = False
+        self._mirror_test_cur_prefix = None
+        self._mirror_test_cur_bytes = 0
+        self._mirror_test_set_progress_visible(False)
         self._set_mirror_test_button(t("settings.mirror_test"))
         if not results:
             if error:
@@ -140,6 +173,107 @@ class MirrorTestMixin:
         else:
             self.mirror_test_var.set(t("mirror_test.none_ok"))
         self._mirror_test_show(ordered, total, canceled)
+
+    # ---------- 进度显示（进度条 + 「正在测哪个」）----------
+
+    def _mirror_test_progress_bytes(
+        self, thread: threading.Thread, prefix: str, nbytes: int
+    ) -> None:
+        """后台报来的「某候选读到 n 字节」（已经转回 GUI 线程）。"""
+        if thread is not self._mirror_test_thread:
+            return          # 上一轮姗姗来迟的事件：别拿旧字节盖新一轮的条
+        if prefix != self._mirror_test_cur_prefix:
+            # 换候选了：秒表的起点跟着挪。连不上的候选也走这儿 ——
+            # mirrortest 对每个候选都会先发一条 0 字节的「开测」事件。
+            self._mirror_test_cur_prefix = prefix
+            self._mirror_test_cur_started = time.monotonic()
+        self._mirror_test_cur_bytes = nbytes
+        self._mirror_test_refresh_progress()
+
+    def _mirror_test_progress_result(
+        self, thread: threading.Thread, done: int
+    ) -> None:
+        """后台报来的「一个候选测完了」（已经转回 GUI 线程）。"""
+        if thread is not self._mirror_test_thread:
+            return
+        self._mirror_test_finished = done
+        self._mirror_test_cur_prefix = None
+        self._mirror_test_cur_bytes = 0
+        self._mirror_test_refresh_progress()
+
+    def _mirror_test_refresh_progress(self) -> None:
+        """把当前进度画到提示行 + 进度条上（只能在 GUI 线程调）。
+
+        进度条的最大刻度 = 候选数，读数 = 已测完 + 当前候选的字节比例；
+        文字里带「已用 n 秒」的秒表（ticker 每 250 ms 刷一次）—— 单个
+        候选卡在连接 / 等首字节时条不动，秒表还在跳，看得出没死。
+        """
+        total = self._mirror_test_total
+        if self._mirror_test_canceling:
+            text = t("mirror_test.canceling")
+        elif self._mirror_test_cur_prefix is None:
+            text = t("mirror_test.running",
+                     done=self._mirror_test_finished, total=total)
+        else:
+            elapsed = max(0.0, time.monotonic() - self._mirror_test_cur_started)
+            text = t("mirror_test.testing",
+                     current=self._mirror_test_finished + 1, total=total,
+                     name=self._mirror_display_name(self._mirror_test_cur_prefix),
+                     elapsed=f"{elapsed:.1f}")
+        self.mirror_test_var.set(text)
+        frac = 0.0
+        if self._mirror_test_cur_prefix is not None:
+            # 0.99 封顶：样本读满了也别提前显示成「整格完」——那一格要等
+            # 结果事件（finished+1）才落地。
+            frac = min(
+                self._mirror_test_cur_bytes / max(1, mirrortest.SAMPLE_BYTES),
+                0.99,
+            )
+        try:
+            self.mirror_progress.configure(
+                maximum=max(1, total), value=self._mirror_test_finished + frac
+            )
+        except tk.TclError:
+            logger.debug("测速进度条不存在（设置页被重建过），跳过读数")
+
+    def _mirror_test_set_progress_visible(self, show: bool) -> None:
+        """进度条只在测速期间占地方（grid / grid_remove 成对用，行列参数不丢）。"""
+        try:
+            if show:
+                self.mirror_progress.grid()
+            else:
+                self.mirror_progress.grid_remove()
+        except tk.TclError:
+            logger.debug("测速进度条不存在（设置页被重建过），跳过显隐")
+
+    # ---------- 秒表（ticker）----------
+
+    def _mirror_test_start_ticker(self) -> None:
+        self._mirror_test_stop_ticker()
+        self._mirror_test_tick_job = self.root.after(
+            _PROGRESS_TICK_MS, self._mirror_test_tick
+        )
+
+    def _mirror_test_stop_ticker(self) -> None:
+        job, self._mirror_test_tick_job = self._mirror_test_tick_job, None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+
+    def _mirror_test_tick(self) -> None:
+        """每 250 ms 刷一次文字：「已用 n 秒」跳着走，看着就不像卡死。"""
+        self._mirror_test_tick_job = None
+        if self.stop_event.is_set() or not self._mirror_test_running():
+            return              # 测完了 / 启动器正在关：不再接力
+        try:
+            self._mirror_test_refresh_progress()
+            self._mirror_test_tick_job = self.root.after(
+                _PROGRESS_TICK_MS, self._mirror_test_tick
+            )
+        except tk.TclError:
+            pass                # 窗口正在销毁
 
     # ---------- 结果窗口 ----------
 

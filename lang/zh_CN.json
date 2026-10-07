@@ -81,6 +81,7 @@
   "jre.probe_error": "检测出错：{err}",
 
   "mirror_test.running": "⏳ 正在测速…（{done}/{total}）",
+  "mirror_test.testing": "⏳ 正在测速 {current}/{total}：{name}（已用 {elapsed} 秒）",
   "mirror_test.canceling": "⏹ 正在取消…",
   "mirror_test.canceled": "已取消测速",
   "mirror_test.title": "GitHub 镜像测速",

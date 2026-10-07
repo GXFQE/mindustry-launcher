@@ -546,6 +546,18 @@ class MainMixin:
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
         row += 1
+        # 测速进行中的进度条：平时整行不存在（grid_remove，行列参数留着），
+        # 测速开始 grid() 出来、结束收回去。读数 = 已测完候选 + 当前候选的
+        # 字节比例（见 gui_mirror._mirror_test_refresh_progress）——不只按
+        # 「第几个」跳，单个候选下载过程中也在一格一格地走。
+        self.mirror_progress = ttk.Progressbar(
+            glob, mode="determinate", maximum=1, value=0
+        )
+        self.mirror_progress.grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=(2, 0)
+        )
+        self.mirror_progress.grid_remove()
+        row += 1
         # ---- 自定义启动参数 ----
         # ★ columnspan=3：这一帧有 3 列（标签 / 输入框 / 按钮），只盖 2 列的话
         #   分割线会在「按钮那一列的左边」断掉 —— 右边凭空少一截（量过：差 178 px）。

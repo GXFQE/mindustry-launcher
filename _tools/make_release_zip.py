@@ -345,7 +345,7 @@ the "ENGLISH" line further down.
    一个镜像站（下拉框里给了几个常用的，也可以自己敲地址）；
    留空就是直连 GitHub。
    不确定哪个镜像快，点旁边的 "测速"：它会真下一小段、把每个候选
-   （含直连）按速度排出来，点 "用最快的" 直接填回去。
+   （含直连）按速度排出来（测的时候有进度条），点 "用最快的" 直接填回去。
 
 4. 在列表里选中一个版本，点 "启动游戏"。
 
@@ -403,7 +403,7 @@ the "ENGLISH" line further down.
 · Java 路径(JRE/JDK) —— JRE 和 JDK 都行，填根目录即可；旁边有 "浏览"
   和 "检测"，"检测" 会真跑一次 java -version 告诉你这份能不能用
 · GitHub 镜像 —— 下载加速用，留空＝直连 GitHub；旁边的 "测速" 会
-  实测各候选的下载速度，"用最快的" 一键填回设置
+  实测各候选的下载速度（带进度条），"用最快的" 一键填回设置
 · 额外 JVM 参数 / 额外游戏参数 —— 想调内存、加启动参数写这里
 · 把游戏输出保存到 logs\\ 目录、日志保留份数
 · 删除文件时直接彻底删除（默认关闭：默认走回收站，删错了能还原）
@@ -527,7 +527,8 @@ HOW TO USE
    address. Leave it empty to talk to GitHub directly.
    Not sure which mirror is fast? Click "测速" (Speed test) next to it: it
    downloads a small sample through every candidate (direct included), sorts
-   them by speed, and "用最快的" (Use fastest) fills the winner back in.
+   them by speed (a progress bar shows which one is being tested), and
+   "用最快的" (Use fastest) fills the winner back in.
 
 4. Select a version in the list, then click "启动游戏" (Launch game).
 
@@ -606,8 +607,8 @@ WHAT YOU CAN CHANGE IN SETTINGS
   (Browse) and "检测" (Detect) sit next to it; Detect really runs
   java -version to tell you whether that copy is usable
 - GitHub mirror -- for faster downloads; empty means direct GitHub. The
-  "测速" (Speed test) button beside it measures every candidate for real and
-  "用最快的" (Use fastest) applies the winner
+  "测速" (Speed test) button beside it measures every candidate for real
+  (with a progress bar), and "用最快的" (Use fastest) applies the winner
 - Extra JVM arguments / extra game arguments -- for memory tuning or launch
   flags
 - Save game output to logs\\, and how many log files to keep

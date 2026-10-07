@@ -58,9 +58,9 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（361 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（390 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（116 项，不起游戏）
+python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（127 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物

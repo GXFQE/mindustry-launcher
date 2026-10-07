@@ -95,6 +95,15 @@ class CoreMixin:
         self._mirror_test_win = None
         self._mirror_test_thread: threading.Thread | None = None
         self._mirror_test_cancel = threading.Event()
+        # 测速进度显示的状态（gui_mirror）：条 = 已测完 + 当前候选字节比例，
+        # 文字 = 候选名 + 已用秒（ticker 每 250 ms 刷）。只在 GUI 线程读写。
+        self._mirror_test_total = 0
+        self._mirror_test_finished = 0
+        self._mirror_test_cur_prefix: str | None = None
+        self._mirror_test_cur_bytes = 0
+        self._mirror_test_cur_started = 0.0
+        self._mirror_test_canceling = False
+        self._mirror_test_tick_job: str | None = None
         # 「正在启动游戏」的牌子。启动时要拼一个 100MB+ 的 jar，
         # 那是整套流程里最吃磁盘的一步；后台 GC 要扫 3 万多个对象，
         # 跟它抢盘只会两头都慢（实测并发时读对象 1.3s → 1.9s）。

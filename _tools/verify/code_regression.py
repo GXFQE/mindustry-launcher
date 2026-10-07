@@ -1492,6 +1492,44 @@ def test_mirror_speed_test():
         check(f"候选再多也只测 {MT.MAX_TARGETS} 个（清单是配置项，可写到 20）",
               len(many) == MT.MAX_TARGETS, f"{len(many)}")
 
+        # ---- 字节进度回调：界面拿它画进度条（先 0 = 开测，之后按块报）----
+        marks: list[int] = []
+        r = MT.test_mirror(base, test_url="blob", sample_bytes=300_000,
+                           on_progress=marks.append)
+        check("单候选：进度先报 0（开测），再按块递增、最后一次=读到的总字节",
+              marks[:1] == [0] and marks[1:] == sorted(marks[1:])
+              and marks[-1] == r.bytes_read, f"{marks}")
+
+        pairs: list[tuple[str, int]] = []
+        MT.test_mirrors([base], test_url="blob", sample_bytes=64 * 1024,
+                        on_progress=lambda p, n: pairs.append((p, n)))
+        check("批量：进度事件带上了候选前缀（界面要显示「正在测哪个」）",
+              bool(pairs) and pairs[0] == (base, 0)
+              and all(p == base for p, _ in pairs), f"{pairs[:3]}")
+
+        dead_marks: list[tuple[str, int]] = []
+        MT.test_mirrors(["http://127.0.0.1:1/"], test_url="blob",
+                        sample_bytes=64 * 1024,
+                        on_progress=lambda p, n: dead_marks.append((p, n)))
+        check("连不上的候选也先有「开测」事件（名字照样能显示出来）",
+              dead_marks == [("http://127.0.0.1:1/", 0)], f"{dead_marks}")
+
+        def boom_progress(_n):
+            raise RuntimeError("界面侧炸了")
+
+        r = MT.test_mirror(base, test_url="blob", sample_bytes=64 * 1024,
+                           on_progress=boom_progress)
+        check("进度回调抛异常被吞（界面的 bug 不许毁掉测速）",
+              r.status == MT.STATUS_OK, str(r))
+
+        def boom_result(_r):
+            raise RuntimeError("界面侧炸了")
+
+        got = MT.test_mirrors([base], test_url="blob", sample_bytes=64 * 1024,
+                              on_result=boom_result)
+        check("结果回调抛异常同样被吞",
+              len(got) == 1 and got[0].status == MT.STATUS_OK, str(got))
+
         # ---- 中途取消：只交已测完的那部分 ----
         ev2 = threading.Event()
 

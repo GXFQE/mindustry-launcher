@@ -26,7 +26,8 @@
 
 对外契约：**这一层绝不抛异常**。连不上、超时、返回错误页…… 全都变成一条
 ``MirrorResult``（带 status），让界面自己决定怎么显示 —— 测速是辅助功能，
-任何一个候选出问题都不该把启动器带崩。
+任何一个候选出问题都不该把启动器带崩。回调（``on_result`` / ``on_progress``）
+同此底线：跑在调用线程里，抛出的异常被吞并记日志。
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from .utils import UNVERIFIED_SSL_CTX
@@ -129,6 +131,18 @@ def _stopped(stop_event: Any | None) -> bool:
     return stop_event is not None and stop_event.is_set()
 
 
+def _safe_call(callback: Callable[..., None], *args: Any) -> None:
+    """调一下回调；出错只记日志，不往外抛。
+
+    回调是调用方（界面）的代码：它的 bug 不该把测速本身毁掉 ——
+    ``test_mirror`` / ``test_mirrors`` 对外都得守住「不抛」的底线。
+    """
+    try:
+        callback(*args)
+    except Exception as e:                                  # noqa: BLE001
+        logger.warning(f"测速回调出错（已忽略）: {e}")
+
+
 class _AnyStop:
     """把多个停止信号合成一个：任一 ``is_set()`` 为真即为真。
 
@@ -159,8 +173,13 @@ def test_mirror(
     budget: float = MIRROR_BUDGET,
     socket_timeout: float = SOCKET_TIMEOUT,
     stop_event: Any | None = None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> MirrorResult:
     """实测一个候选（前缀）。**不抛异常** —— 一切意外都变成一条失败结果。
+
+    ``on_progress``（可选）报**字节进度**：先来一条 ``0``（＝这个候选
+    开测了，界面靠它把「正在测 X」切过来），之后每读一块报一次累计
+    字节数。跟 ``test_mirrors`` 的回调一样跑在**调用线程**、出错被吞。
 
     参数给的是默认值，测试会用更小的样本/预算 + 本地 HTTP 服务来跑，
     所以别再写第二套实现（见 ``_tools/verify/code_regression.py``）。
@@ -169,6 +188,10 @@ def test_mirror(
         return MirrorResult(prefix, STATUS_CANCELED)
     url = probe_url(prefix, test_url)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    # 「开测了」要发在请求之前：连接阶段（DNS/TCP/TLS）界面也得有东西
+    # 可显示 —— 不然慢镜像握手那几秒里进度条和文字全是定格。
+    if on_progress is not None:
+        _safe_call(on_progress, 0)
     t0 = time.perf_counter()
     received = 0
     first_byte_at: float | None = None
@@ -199,6 +222,8 @@ def test_mirror(
                 if first_byte_at is None:
                     first_byte_at = time.perf_counter()
                 received += len(chunk)
+                if on_progress is not None:
+                    _safe_call(on_progress, received)
     except urllib.error.HTTPError as e:
         # urlopen 对 4xx/5xx 直接抛异常，拿不到 resp —— 错误码在异常里。
         code = int(getattr(e, "code", 0) or 0)
@@ -258,11 +283,15 @@ def test_mirrors(
     sample_bytes: int = SAMPLE_BYTES,
     budget: float = MIRROR_BUDGET,
     socket_timeout: float = SOCKET_TIMEOUT,
+    on_progress: Callable[[str, int], None] | None = None,
 ) -> list[MirrorResult]:
     """依次实测一串候选，返回**已测完**的结果（被取消时可能不满）。
 
-    ``on_result`` 每测完一个就回调一次，用来报进度。★ 它跑在**调用线程**里
-    （不是 Tk 主线程）—— 界面那边要自己 ``run_on_gui`` 转回去再碰控件。
+    ``on_result`` 每测完一个就回调一次，用来报进度。
+    ``on_progress(prefix, nbytes)``（可选）是**字节级**进度：每换一个候选
+    先来一条 ``0``，之后按块报 —— 界面拿它画「第几个 + 这个读到哪」。
+    ★ 两个回调都跑在**调用线程**里（不是 Tk 主线程）—— 界面那边要自己
+    ``run_on_gui`` 转回去再碰控件；回调抛异常会被吞并记日志。
     """
     targets = list(prefixes)
     if len(targets) > MAX_TARGETS:
@@ -275,6 +304,10 @@ def test_mirrors(
     for prefix in targets:
         if _stopped(stop_event):
             break
+        # 把候选前缀缝进单候选的进度回调里：界面只认 (前缀, 字节) 一种
+        # 事件（用 partial 而不是闭包 lambda —— 循环变量不会晚绑定）。
+        cb = (None if on_progress is None
+              else partial(_safe_call, on_progress, prefix))
         r = test_mirror(
             prefix,
             test_url=test_url,
@@ -282,6 +315,7 @@ def test_mirrors(
             budget=budget,
             socket_timeout=socket_timeout,
             stop_event=stop_event,
+            on_progress=cb,
         )
         results.append(r)
         # 每个候选留一条日志：测速结果直接影响用户改镜像的选择，
@@ -296,12 +330,9 @@ def test_mirrors(
         if r.message:
             detail += f" msg={r.message}"
         logger.info(f"测速候选 {r.prefix or '（直连）'}: {r.status} {detail}")
-        # 进度回调出错（界面那边的 bug）不该毁掉整轮测速
+        # 回调出错（界面那边的 bug）不该毁掉整轮测速 —— 见 _safe_call
         if on_result is not None:
-            try:
-                on_result(r)
-            except Exception as e:                              # noqa: BLE001
-                logger.warning(f"测速进度回调出错（已忽略）: {e}")
+            _safe_call(on_result, r)
         if r.status == STATUS_CANCELED:
             break
     logger.info(f"镜像测速结束：测了 {len(results)}/{len(targets)} 个候选")

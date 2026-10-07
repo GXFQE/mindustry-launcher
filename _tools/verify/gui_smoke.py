@@ -887,11 +887,15 @@ def main() -> int:
         }
 
         def fake_test_mirrors(prefixes, *, on_result=None, stop_event=None,
-                              **kwargs):
+                              on_progress=None, **kwargs):
             out = []
             for p in prefixes:
                 if stop_event is not None and stop_event.is_set():
                     break
+                if on_progress is not None:
+                    on_progress(p, 0)                       # 「开测」事件
+                    on_progress(p, MT.SAMPLE_BYTES // 2)    # 读到一半
+                time.sleep(0.4)     # 留出观察进度条的窗口（见 probe_running）
                 r = MT.MirrorResult(
                     prefix=p, status=MT.STATUS_OK,
                     latency_ms=20.0, speed_bps=fake_speed.get(p, 1000.0),
@@ -906,6 +910,29 @@ def main() -> int:
         test_btn = find_widget(app.settings_frame, "测速")
         check("设置页里有「测速」按钮", test_btn is not None)
         picked: dict[str, object] = {"done": False, "attempts": 0}
+
+        running: dict[str, object] = {"tries": 0}
+
+        def probe_running() -> None:
+            """测速进行中（结果窗还没影）时的进度状态：条 + 文字。
+
+            条的读数是「后台事件 → run_on_gui → 刷控件」推出来的，头几轮
+            事件到齐前可能还是 0 —— 没看到就稍后再看一眼（最多 ~1.2 s）。
+            假实现每个候选停 0.4 s、共 3 个，窗口足够大。
+            """
+            bar = getattr(app, "mirror_progress", None)
+            try:
+                visible = bar is not None and bool(bar.winfo_ismapped())
+                value = float(bar["value"]) if bar is not None else 0.0
+            except tk.TclError:
+                return
+            if not (visible and value > 0) and int(running["tries"]) < 20:
+                running["tries"] = int(running["tries"]) + 1
+                app.root.after(60, probe_running)
+                return
+            running["visible"] = visible
+            running["value"] = value
+            running["text"] = app.mirror_test_var.get()
 
         def probe_dialog() -> None:
             """结果窗弹出后（它在自己的嵌套事件循环里）做检查再收尾。
@@ -932,6 +959,7 @@ def main() -> int:
             picked["done"] = True
 
         if test_btn is not None:
+            app.root.after(120, probe_running)
             app.root.after(150, probe_dialog)
             test_btn.invoke()
             # pump 会「卡」在结果窗的嵌套事件循环里，probe_dialog 在里面
@@ -939,6 +967,15 @@ def main() -> int:
             pump(app, 8.0)
         check("点「测速」后结果窗弹了出来（探针跑完了）",
               picked["done"] is True, str(picked))
+        check("★ 测速中：进度条摆出来、读数随字节推进（看着不像卡住）",
+              running.get("visible") is True
+              and isinstance(running.get("value"), float)
+              and 0 < float(running["value"]) < 3,
+              str(running))
+        check("测速中：提示行点名「正在测哪个」+ 已用时间秒表",
+              "正在测速" in str(running.get("text", ""))
+              and "已用" in str(running.get("text", "")),
+              str(running.get("text")))
         check("结果窗里是一张按速度排序的表（最快在最前）",
               picked.get("rows") == [SMOKE_MIRROR_PRESETS[0],
                                      SMOKE_MIRROR_PRESETS[1],
@@ -955,6 +992,9 @@ def main() -> int:
               test_btn is not None
               and str(test_btn.cget("text")) == "测速",
               str(test_btn.cget("text")) if test_btn is not None else "None")
+        bar = getattr(app, "mirror_progress", None)
+        check("测速结束后进度条收回（只剩结论那行）",
+              bar is not None and not bar.winfo_ismapped(), str(bar))
         MT.test_mirrors = real_test_mirrors
         app.github_mirror_var.set("")
         app.mirror_test_var.set("")

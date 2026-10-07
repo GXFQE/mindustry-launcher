@@ -65,8 +65,9 @@ launcher.log    the launcher's own log — look here first when something goes w
   missing it looks in `JAVA_HOME` / `PATH`.
 - **GitHub mirror** — leave blank to talk to GitHub directly. The **Speed test**
   button next to it downloads a small sample through every candidate (direct
-  included) and sorts them by speed; **Use fastest** fills the winner back into
-  the setting. Line quality varies by ISP and region, so the order of the
+  included) and sorts them by speed (**a progress bar shows which candidate is
+  being tested**, so it never looks stuck); **Use fastest** fills the winner back
+  into the setting. Line quality varies by ISP and region, so the order of the
   dropdown means nothing.
 - **Delete permanently** — off by default, so deletions go to the **recycle bin** and can
   be restored. Turn it on and they are gone for good.

@@ -81,6 +81,7 @@
   "jre.probe_error": "Test failed: {err}",
 
   "mirror_test.running": "⏳ Testing… ({done}/{total})",
+  "mirror_test.testing": "⏳ Testing {current}/{total}: {name} ({elapsed}s elapsed)",
   "mirror_test.canceling": "⏹ Canceling…",
   "mirror_test.canceled": "Speed test canceled",
   "mirror_test.title": "GitHub mirror speed test",

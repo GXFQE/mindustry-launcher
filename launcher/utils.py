@@ -16,6 +16,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from . import ghauth
+
 __all__ = [
     "BASE_DIR",
     "DEV_LOG_NAME",
@@ -332,6 +334,10 @@ def download_file(
     expected_sha256: str | None = None,
 ) -> bool:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    # 装了 gh 且已登录的话，给 GitHub 官方域名的下载带上认证（额度更高、
+    # 私有资产也能下）；镜像前缀 / 自定义源这类第三方地址**不带**（白名单
+    # 在 ghauth 里）。增强项：失败绝不影响下载本身。
+    ghauth.apply_auth(req)
     try:
         with urllib.request.urlopen(
             req, timeout=30, context=UNVERIFIED_SSL_CTX

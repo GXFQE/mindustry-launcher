@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from . import ghauth
 from . import sources as _sources
 from .utils import (
     LAUNCHER_UPDATE_DEFAULT,
@@ -377,6 +378,12 @@ class ConfigManager:
         # 它跟 github_mirror 一样会被存进 config.json，所以「恢复默认设置」
         # 不会动它 —— 那是用户的候选清单，不是界面上的临时勾选。
         "github_mirror_presets": list(DEFAULT_MIRROR_PRESETS),
+        # ★ 是否复用本机 GitHub CLI（gh）的登录态：检测到已登录的 gh 时，
+        #   发往 GitHub 官方域名的请求会带上认证 —— API 额度从 60 次/时
+        #   （按出口 IP 共享）提高到 5000 次/时。关掉 = 从不使用。
+        #   令牌只存在内存里（launcher/ghauth.py），不落盘、不进日志；
+        #   第三方域名的请求（镜像、自定义源、自建代理）永远不带令牌。
+        "use_gh_auth": True,
         "auto_update": True,
         # ★ 启动器**自身**的更新档位 —— 注意跟上面的 "auto_update" 不是
         #   一回事：那个管「**游戏**版本有没有新版」，这个管「**启动器**自己
@@ -529,6 +536,19 @@ class ConfigManager:
         logger.warning(f"配置项 {key}={raw!r} 无法处理，按默认值处理")
         return default
 
+    def _apply_gh_auth(self) -> None:
+        """把 ``use_gh_auth`` 开关同步给 ghauth 模块（令牌注入的总闸门）。
+
+        ★ 它必须与配置**永远**同步：构造时 ``load()`` 走一次、``set()``
+          改这一项时再走一次。漏掉任何一处，就会出「关掉了却还在用」
+          或者「开了没生效」—— 而且只在某条路径上复现，极难查。
+        """
+        ghauth.set_enabled(
+            bool(self.data.get(
+                "use_gh_auth", self.GLOBAL_DEFAULTS["use_gh_auth"]
+            ))
+        )
+
     def _coerce_profile(self, name: str, key: str, raw: Any) -> Any:
         """分类级配置项。**不抛异常**；数值型的上下限在这里统一夹住。
 
@@ -652,6 +672,9 @@ class ConfigManager:
                 if added:
                     logger.info(f"配置里补上新增项: {', '.join(added)}")
                     self.save()
+            # ★ 把「用不用 gh 认证」同步给 ghauth 模块。放在块尾：此时 data
+            #   里所有键都已整理完。另一处同步在 set()（见 _apply_gh_auth）。
+            self._apply_gh_auth()
 
     def _migrate(self, saved: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         """把任意历史版本的配置升到 ``CONFIG_VERSION``。
@@ -852,6 +875,9 @@ class ConfigManager:
             with self._lock:
                 self.data[key] = self._coerce_global(key, value)
             logger.debug(f"全局配置项 {key} 设置为 {value}")
+            if key == "use_gh_auth":
+                # 开关类的外部同步：改了就得当场生效（不等重启、不等 save）。
+                self._apply_gh_auth()
         else:
             # 不认识的键：以前是**静默忽略**。发布之后这很容易变成
             # 「界面改了但没生效」那种查不出来的问题，所以留一条 WARNING。

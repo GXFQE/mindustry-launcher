@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigManager, normalize_mirror
+from .ghauth import apply_auth
 from .i18n import t
 from .storage import VersionManager
 from .utils import UNVERIFIED_SSL_CTX, download_file, parse_bool
@@ -128,6 +129,9 @@ class UpdateManager:
             req = urllib.request.Request(
                 url, headers={"User-Agent": USER_AGENT}
             )
+            # 装了 gh 且已登录时带上认证（额度 60→5000 次/时）。白名单只放
+            # GitHub 官方域名 —— 用户自定义的第三方来源拿不到令牌。
+            apply_auth(req)
             # 超时别给太长：这里卡住的每一秒都会变成「点了检查更新没反应」
             # 或者「关窗口关不掉」。GitHub API 正常一两秒就回。
             with urllib.request.urlopen(

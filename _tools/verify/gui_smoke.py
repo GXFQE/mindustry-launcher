@@ -147,6 +147,9 @@ def make_sandbox() -> Path:
         # 旧的镜像开关：已废弃，留着验证「保存后不会再被写回配置」
         "use_mirror": True,
         "github_mirror": "",            # 沙箱不下载，直连即可
+        # gh 认证：沙箱里显式关掉（默认是开的）—— 构建设置页时不起 gh
+        # 子进程去探测；下面 [2e] 再单独测「勾上 → 探测 → 回填」这条链。
+        "use_gh_auth": False,
         # 候选镜像站也是配置项（设置页下拉框读它）
         "github_mirror_presets": list(SMOKE_MIRROR_PRESETS),
         "auto_update": False,           # 别在这里发网络请求
@@ -998,6 +1001,48 @@ def main() -> int:
         MT.test_mirrors = real_test_mirrors
         app.github_mirror_var.set("")
         app.mirror_test_var.set("")
+        app.root.update()
+
+        print("\n[2e] gh 认证：勾选框 → 后台探测 → 状态行，保存进配置")
+        # 探测会起 gh 子进程 —— 冒烟里换成假实现（真探测在 code_regression
+        # [12c] 与实机验证里跑），这里只验「界面这一层」的接线。
+        import launcher.ghauth as ghauth
+        real_refresh = ghauth.refresh_status
+        ghauth.refresh_status = lambda: "missing"
+        try:
+            app.show_settings()
+            app.root.update()
+            check("沙箱里默认关着：状态行说「已关闭」",
+                  app.use_gh_auth_var.get() is False
+                  and "已关闭" in app.gh_auth_status_var.get(),
+                  app.gh_auth_status_var.get())
+            gh_box = find_widget(
+                app.settings_frame, "使用 GitHub CLI 认证（提高 API 额度）"
+            )
+            check("设置页里有「使用 GitHub CLI 认证」勾选框",
+                  gh_box is not None)
+            if gh_box is not None:
+                gh_box.invoke()      # 勾上：同步进「检测中」，探测走后台
+                check("勾上后状态行先显示「正在检测」（不是干等）",
+                      "正在检测" in app.gh_auth_status_var.get(),
+                      app.gh_auth_status_var.get())
+                pump(app, 2.0)       # 等后台线程 + run_on_gui 回填
+                check("探测完成后状态行报结果（假实现报「未检测到」）",
+                      "未检测到 GitHub CLI" in app.gh_auth_status_var.get(),
+                      app.gh_auth_status_var.get())
+            app.save_settings()
+            app.root.update()
+            saved = json.loads(
+                (root / "config.json").read_text(encoding="utf-8")
+            )
+            check("保存后 use_gh_auth=True 进了 config.json",
+                  saved.get("use_gh_auth") is True,
+                  repr(saved.get("use_gh_auth")))
+        finally:
+            ghauth.refresh_status = real_refresh
+        # 恢复：别给后面的测试留下「开着 gh 认证」的沙箱状态
+        app.use_gh_auth_var.set(False)
+        app.save_settings()
         app.root.update()
 
         # 主面板的「当前存档」：滚一下也不许换分类

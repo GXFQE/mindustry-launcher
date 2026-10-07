@@ -142,6 +142,9 @@ REQUIRED = {
         # 反向 import config，否则又是一个环）
         "normalize_language", "LANGUAGE_AUTO", "LANGUAGE_CODES",
         "LANGUAGE_DEFAULT", "LANGUAGES",
+        # 2026-10-07：文件下载也会带上 gh 认证（仅 GitHub 官方域名；镜像站
+        # 这类第三方地址不带 —— 白名单在 ghauth 里）
+        "ghauth",
     ],
     "launcher.config": [
         # 版本号会拼进清单文件名，必须和分类名一样过校验
@@ -201,6 +204,10 @@ REQUIRED = {
         # 2026-09-19 追加：设置页的灰字提示放不下就折行（以前长提示会被
         # grid 直接裁掉一截，用户截过图）
         "_auto_wrap_hint", "_HINT_PAD",
+        # 2026-10-07 追加：gh 认证的勾选框 + 后台探测（子进程）回填状态行
+        "use_gh_auth_var", "gh_auth_status_var", "ghauth",
+        "_on_gh_auth_toggled", "_start_gh_auth_probe", "_gh_auth_probe_task",
+        "_apply_gh_auth_status",
     ],
     # 2026-10-05 新增：i18n 地基。不在包里 = exe 还是「文案写死在代码里」的
     # 旧逻辑（界面上根本换不了语言，而且这种退化只看窗口能不能打开发现不了）。
@@ -220,6 +227,8 @@ REQUIRED = {
         # 2026-09-22：改成一个来源一个来源地拉（来源表在 sources.py），
         # 不再在 updates 里写死仓库地址
         "_fetch_release", "sources", "parse_bool",
+        # 2026-10-07：查版本也会带 gh 认证（GitHub 官方来源；自定义来源不带）
+        "apply_auth",
     ],
     # 2026-09-22 新增的三个模块（面向发布的可扩展性接口）。跟 09-18 那两个
     # 一样：不在包里 = exe 还是旧逻辑（来源写死、没有迁移链、没有扩展点），
@@ -257,6 +266,9 @@ REQUIRED = {
         # 只放行 exe 自己与 _internal/ —— 「绝不碰用户数据」就落在这两个名字上
         "_is_replaceable", "_safe_rel", "PROTECTED_NAMES",
         "UPDATE_ASSET_SUFFIX", "DISABLE_ENV", "MODE_AUTO",
+        # 2026-10-07：查「自己的新版」也带 gh 认证（接口被环境变量换成
+        # 自建代理时白名单会挡住令牌 —— 代理拿到它等于泄露）
+        "apply_auth",
     ],
     # 2026-10-07 新增：GitHub 镜像测速（mirrortest 纯逻辑 + gui_mirror 界面）。
     # 跟前面那些一样：不在包里 = exe 还是个「设置页没有测速按钮」的旧版本，
@@ -284,6 +296,14 @@ REQUIRED = {
         "_mirror_display_name", "_mirror_status_text",
         # 换语言的整页重建会把按钮换掉 —— 改按钮文字要吞 TclError
         "_set_mirror_test_button", "mirrortest", "normalize_mirror", "t",
+    ],
+    # 2026-10-07 新增：GitHub CLI 认证（复用本机 gh 登录态，API 额度 60→5000）。
+    # 不在包里 = exe 还是「匿名请求、被共享出口 IP 的 60 次/时卡住」的旧版本。
+    "launcher.ghauth": [
+        "set_enabled", "get_github_token", "refresh_status", "apply_auth",
+        # ★ 域名白名单与超时是安全底线：只给 GitHub 官方域名带令牌、
+        #   关掉开关连探测都不做、子进程卡住最多等 6 秒
+        "_host_allowed", "_GITHUB_HOSTS", "_GH_TIMEOUT",
     ],
     # ★ 2026-10-07 补漏：这两个**老**模块一直不在上面的清单里。这次加测速
     # 时才发现的 —— 「逐模块断言」的覆盖面**自己也会漏**，而漏掉一个模块

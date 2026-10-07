@@ -404,6 +404,9 @@ the "ENGLISH" line further down.
   和 "检测"，"检测" 会真跑一次 java -version 告诉你这份能不能用
 · GitHub 镜像 —— 下载加速用，留空＝直连 GitHub；旁边的 "测速" 会
   实测各候选的下载速度（带进度条），"用最快的" 一键填回设置
+· 使用 GitHub CLI 认证 —— 本机装了 GitHub CLI（gh）并登录过的话，勾上它，
+  GitHub 请求带上认证：API 额度从 60 次/时（按出口 IP 共享）提高到
+  5000 次/时。令牌只放在内存里、不写文件；镜像站和自定义来源收不到它
 · 额外 JVM 参数 / 额外游戏参数 —— 想调内存、加启动参数写这里
 · 把游戏输出保存到 logs\\ 目录、日志保留份数
 · 删除文件时直接彻底删除（默认关闭：默认走回收站，删错了能还原）
@@ -609,6 +612,10 @@ WHAT YOU CAN CHANGE IN SETTINGS
 - GitHub mirror -- for faster downloads; empty means direct GitHub. The
   "测速" (Speed test) button beside it measures every candidate for real
   (with a progress bar), and "用最快的" (Use fastest) applies the winner
+- Use GitHub CLI authentication -- if GitHub CLI (gh) is installed and logged
+  in, tick it and GitHub requests get authenticated: the API quota rises from
+  60/hour (shared per IP) to 5000/hour. The token stays in memory and is never
+  written to disk; mirrors and custom sources never see it
 - Extra JVM arguments / extra game arguments -- for memory tuning or launch
   flags
 - Save game output to logs\\, and how many log files to keep

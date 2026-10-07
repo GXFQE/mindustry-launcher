@@ -50,6 +50,7 @@
   "settings.hint.jre_path": "Either the JRE or the JDK root works (it must contain bin\\java.exe); \"jre\" means the folder next to the launcher",
   "settings.hint.mirror": "Prefixed to download URLs for acceleration; empty = direct GitHub. If one mirror fails, the next is tried",
   "settings.hint.mirror_test": "Click Speed test to measure each candidate, then pick the fastest (the result goes into the box above)",
+  "settings.hint.gh_auth": "When GitHub CLI (gh) is installed and logged in, GitHub requests get authenticated: API quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in memory only; mirrors and custom sources never see it.",
   "settings.hint.extra_vm": "Placed before -cp, e.g. -Xmx4G; space-separated - wrap an item in double quotes if it contains spaces",
   "settings.hint.extra_prog": "Passed to the game after the main class (rarely needed; mainly for troubleshooting)",
   "settings.hint.max_logs": "← the oldest are dropped beyond this (takes effect on the next launch)",
@@ -60,6 +61,7 @@
   "settings.auto_update": "Check for updates on startup",
   "settings.save_game_log": "Save game output to logs/ (if off, it is shown live in the log window only)",
   "settings.permanent_delete": "Delete files permanently (bypass the recycle bin, cannot be undone)",
+  "settings.use_gh_auth": "Use GitHub CLI authentication (higher API quota)",
   "settings.detect": "Test",
   "settings.mirror_test": "Speed test",
   "settings.reset": "Reset to defaults",
@@ -79,6 +81,12 @@
   "jre.ok": "✅ Java works: {text}",
   "jre.fail": "❌ Java does not work: {text}",
   "jre.probe_error": "Test failed: {err}",
+
+  "gh_auth.checking": "⏳ Checking for gh CLI…",
+  "gh_auth.ok": "✅ GitHub CLI login detected, authentication active",
+  "gh_auth.not_logged_in": "⚠️ gh found but not logged in: run gh auth login, then come back",
+  "gh_auth.missing": "GitHub CLI (gh) not found: this option has no effect",
+  "gh_auth.off": "Off: GitHub requests are sent unauthenticated",
 
   "mirror_test.running": "⏳ Testing… ({done}/{total})",
   "mirror_test.testing": "⏳ Testing {current}/{total}: {name} ({elapsed}s elapsed)",

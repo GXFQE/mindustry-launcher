@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import normalize_mirror
+from .ghauth import apply_auth
 from .i18n import t
 from .utils import (
     LAUNCHER_UPDATE_MODES,
@@ -315,6 +316,9 @@ def fetch_latest_update(timeout: int = 6) -> dict | None:
             api,
             headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
         )
+        # 装了 gh 且已登录时带上认证。★ 环境变量把接口换到自建代理时，
+        # 白名单（ghauth）会挡住令牌 —— 代理拿到它就等于泄露，宁可退匿名。
+        apply_auth(req)
         # 超时给短一点：这个请求在后台跑，卡住的每一秒都是白等
         with urllib.request.urlopen(
             req, timeout=timeout, context=UNVERIFIED_SSL_CTX

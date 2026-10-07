@@ -50,6 +50,7 @@
   "settings.hint.jre_path": "填 JRE 或 JDK 的根目录都行（里面要有 bin\\java.exe）；只写 jre 表示启动器旁边那个",
   "settings.hint.mirror": "下载 jar 时拼在地址前做加速；留空＝直连 GitHub，这个源拉不动会自动换下一个",
   "settings.hint.mirror_test": "点「测速」实测各候选的下载速度，再选最快的那个（结果会填进上面的框）",
+  "settings.hint.gh_auth": "本机装了并登录 GitHub CLI（gh）时，GitHub 请求会带上认证：API 额度从 60 次/时（按出口 IP 共享）提高到 5000 次/时。令牌只放在内存里，不写入文件；镜像站与自定义来源收不到它。",
   "settings.hint.extra_vm": "加在 -cp 之前，如 -Xmx4G；空格分隔，含空格的项用英文双引号包住",
   "settings.hint.extra_prog": "传给游戏本体，加在主类之后（一般用不到，排查问题时才填）",
   "settings.hint.max_logs": "← 超出后从最旧的开始丢（下次启动游戏生效）",
@@ -60,6 +61,7 @@
   "settings.auto_update": "启动时自动检查更新",
   "settings.save_game_log": "把游戏输出保存到 logs/ 目录（关掉则只在日志窗口里实时显示）",
   "settings.permanent_delete": "删除文件时直接彻底删除（不进回收站，不可还原）",
+  "settings.use_gh_auth": "使用 GitHub CLI 认证（提高 API 额度）",
   "settings.detect": "检测",
   "settings.mirror_test": "测速",
   "settings.reset": "重置默认",
@@ -79,6 +81,12 @@
   "jre.ok": "✅ Java 可用：{text}",
   "jre.fail": "❌ Java 不可用：{text}",
   "jre.probe_error": "检测出错：{err}",
+
+  "gh_auth.checking": "⏳ 正在检测 gh CLI…",
+  "gh_auth.ok": "✅ 已检测到 GitHub CLI 登录，认证生效",
+  "gh_auth.not_logged_in": "⚠️ 检测到 gh，但尚未登录：先运行 gh auth login，再回到本页",
+  "gh_auth.missing": "未检测到 GitHub CLI（gh）：本项不生效，不影响其他功能",
+  "gh_auth.off": "已关闭：GitHub 请求不带认证",
 
   "mirror_test.running": "⏳ 正在测速…（{done}/{total}）",
   "mirror_test.testing": "⏳ 正在测速 {current}/{total}：{name}（已用 {elapsed} 秒）",

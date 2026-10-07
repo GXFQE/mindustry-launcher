@@ -37,6 +37,7 @@ launcher/               全部源码
     extensions.py       ★ 扩展点（加功能不用重新打包）
     i18n.py             ★ 界面文案取词（t / 语言包 / 系统语言探测）
     utils.py            路径、日志、原子写、回收站
+    ghauth.py           ★ GitHub CLI 认证（复用本机 gh 登录态；令牌只给官方域名）
     config.py           配置读写（存档分类 + jvm 启动配置 + 迁移链）
     storage.py          CAS 存储、备份、拼装运行时 jar
     updates.py          更新检查与下载（游戏本体）
@@ -58,9 +59,9 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（390 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（406 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（127 项，不起游戏）
+python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（132 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物

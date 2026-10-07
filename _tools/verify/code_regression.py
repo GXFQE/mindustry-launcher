@@ -548,6 +548,7 @@ def main():
     test_output_encoding_end_to_end()
     test_mirror_and_log_keep()
     test_mirror_speed_test()
+    test_gh_auth()
     test_lock_scope()
     test_wheel_routing()
     test_settings_flow_and_autoclose()
@@ -1557,6 +1558,162 @@ def test_mirror_speed_test():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --------------------- 12c. GitHub CLI 认证（ghauth，离线，确定性）
+def test_gh_auth():
+    """「复用 gh 登录态」这层最要紧的是**边界**，不是功能本身。
+
+    * 令牌只许流向 GitHub 官方域名 —— 用户能自定义版本来源、镜像前缀、
+      自更新代理接口，那些都是「别人」的服务器（拿到令牌 = 泄露）；
+    * 开关关掉 = **连探测都不做**（不是「取了放在内存里不用」）。
+
+    全程不碰真 gh（子进程、凭据都是假对象），只验纯逻辑与接线。
+    """
+    print("\n[12c] GitHub CLI 认证（域名白名单 + 开关）")
+    import subprocess as _subprocess
+    from launcher import ghauth
+    from launcher.config import ConfigManager
+
+    saved = (ghauth._enabled, ghauth._probed, ghauth._token, ghauth._status)
+
+    # ---- ① 域名白名单：精确匹配，冒充域名一个都别想混进来 ----
+    allow = [
+        "https://api.github.com/repos/x/y/releases/latest",
+        "https://github.com/x/y/releases/download/v1/a.jar",
+        "https://codeload.github.com/x/y/zip/refs/tags/v1",
+        "https://objects.githubusercontent.com/x/y",
+        "https://release-assets.githubusercontent.com/x/y",
+    ]
+    deny = [
+        "https://api.github.com.evil.com/x",        # 后缀陷阱
+        "https://github.com.evil.com/x",
+        "https://github.com@evil.com/x",            # userinfo 伪装
+        "https://evil.com/github.com/x",            # 路径里出现
+        "https://raw.githubusercontent.com/x",      # 不在册
+        "https://ghproxy.example/https://github.com/x/a.jar",   # 镜像前缀
+        "http://github.com/x",                      # 明文 http
+        "https://github.com:8443/x",                # 非默认端口
+        "ftp://github.com/x",
+        "not a url",
+        "",
+    ]
+    bad_allow = [u for u in allow if not ghauth._host_allowed(u)]
+    check("白名单放行全部 GitHub 官方域名", not bad_allow, str(bad_allow))
+    bad_deny = [u for u in deny if ghauth._host_allowed(u)]
+    check("★ 白名单拦下全部冒充/第三方/降级地址（令牌只去 GitHub 自己家）",
+          not bad_deny, str(bad_deny))
+
+    # ---- ② 有令牌：该加头加、不该加的一个字节都不给 ----
+    import urllib.request as _ur
+
+    def _mk(url):
+        return _ur.Request(url, headers={"User-Agent": "t"})
+
+    ghauth._enabled, ghauth._probed = True, True
+    ghauth._token = "test-token-not-real"
+    req = _mk("https://api.github.com/x")
+    ghauth.apply_auth(req)
+    check("GitHub 官方请求：带上了认证头",
+          "Authorization" in dict(req.header_items()),
+          str(sorted(k for k, _ in req.header_items())))
+    req = _mk("https://ghproxy.example/https://github.com/x")
+    ghauth.apply_auth(req)
+    check("★ 镜像站/第三方请求：绝不带认证头",
+          "Authorization" not in dict(req.header_items()),
+          str(sorted(k for k, _ in req.header_items())))
+
+    # ---- ③ 开关关闭：不取、不探测、不改请求 ----
+    ghauth._probed, ghauth._token = False, None
+    called: list[int] = []
+    real_probe = ghauth._probe
+    ghauth._probe = lambda: called.append(1)
+    got = "sentinel"
+    try:
+        ghauth.set_enabled(False)
+        got = ghauth.get_github_token()
+        req = _mk("https://api.github.com/x")
+        ghauth.apply_auth(req)
+    finally:
+        ghauth._probe = real_probe
+    check("★ 开关关闭：get_github_token 直接 None（不碰凭据）",
+          got is None, repr(got))
+    check("★ 开关关闭：连探测都没跑（不是「取了不用」）",
+          called == [], str(called))
+    check("开关关闭：apply_auth 不动请求",
+          "Authorization" not in dict(req.header_items()))
+
+    # ---- ④ 探测三态：没装 gh / 装了没登录 / 已登录 ----
+    import shutil as _sh
+    real_which, real_run = _sh.which, _subprocess.run
+
+    class _FakeProc:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+
+    try:
+        _sh.which = lambda _name: None
+        ghauth.set_enabled(True)
+        st = ghauth.refresh_status()
+        check("没装 gh -> missing", st == "missing", st)
+
+        _sh.which = lambda _name: "C:/fake/gh.exe"
+        _subprocess.run = lambda *a, **k: _FakeProc(1, "")
+        st = ghauth.refresh_status()
+        check("gh 在但没登录 -> not-logged-in",
+              st == "not-logged-in" and ghauth._token is None, st)
+
+        _subprocess.run = lambda *a, **k: _FakeProc(0, "tok-abc\n")
+        st = ghauth.refresh_status()
+        tok = ghauth.get_github_token()
+        check("gh 已登录 -> ok，令牌取了并去掉换行",
+              st == "ok" and tok == "tok-abc", f"{st} {tok!r}")
+    finally:
+        _sh.which, _subprocess.run = real_which, real_run
+
+    # ---- ⑤ 配置层接线：坏值退默认 + 告警点键名；开关同步到 ghauth ----
+    sb = Path(tempfile.mkdtemp()) / "cfg_gh"
+    sb.mkdir(parents=True, exist_ok=True)
+    _msgs: list[str] = []
+    _h = logging.Handler()
+    _h.emit = lambda rec: _msgs.append(rec.getMessage())
+    _logs = [logging.getLogger("launcher.config"),
+             logging.getLogger("launcher.utils")]
+    for lg in _logs:
+        lg.addHandler(_h)
+    try:
+        f1 = sb / "c1.json"
+        f1.write_text(json.dumps({"use_gh_auth": "maybe"}), encoding="utf-8")
+        cm = ConfigManager(f1)
+    finally:
+        for lg in _logs:
+            lg.removeHandler(_h)
+    check("坏开关值退默认（默认开着）", cm.get("use_gh_auth") is True,
+          repr(cm.get("use_gh_auth")))
+    check("★ 退默认的告警点名了配置键 use_gh_auth",
+          any("use_gh_auth" in m for m in _msgs), str(_msgs))
+    check("config 构造时把开关注入 ghauth", ghauth._enabled is True)
+
+    f2 = sb / "c2.json"
+    f2.write_text(json.dumps({"use_gh_auth": False}), encoding="utf-8")
+    cm2 = ConfigManager(f2)
+    check("配置里关掉 -> ghauth 当场关",
+          cm2.get("use_gh_auth") is False and ghauth._enabled is False)
+    cm2.set("use_gh_auth", True)
+    check("set('use_gh_auth') 也同步 ghauth（不等保存、不等重启）",
+          ghauth._enabled is True)
+
+    f3 = sb / "c3.json"
+    f3.write_text(json.dumps({"auto_update": False}), encoding="utf-8")
+    ConfigManager(f3)
+    saved3 = json.loads(f3.read_text(encoding="utf-8"))
+    check("老配置自动补上 use_gh_auth（默认开着，用户看得见）",
+          saved3.get("use_gh_auth") is True
+          and saved3.get("auto_update") is False, str(saved3)[:120])
+
+    # 恢复现场：后面的测试不该继承这一层的模块级状态。
+    ghauth._enabled, ghauth._probed, ghauth._token, ghauth._status = saved
 
 
 # ------------------------------------- 13. 锁的作用域（持锁弹窗 = 自锁）

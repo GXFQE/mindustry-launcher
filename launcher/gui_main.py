@@ -11,6 +11,7 @@ from .config import (
     normalize_log_keep,
     normalize_mirror,
 )
+from . import ghauth
 from .gamecmd import check_extra_args, probe_java, split_args
 from .i18n import apply_setting, current_language, t
 from .utils import LANGUAGE_AUTO, LANGUAGE_CODES, LANGUAGES
@@ -558,6 +559,46 @@ class MainMixin:
         )
         self.mirror_progress.grid_remove()
         row += 1
+        # ---- GitHub 认证（复用本机 gh CLI 的登录态） ----
+        # 未认证的 GitHub API 是 60 次/时且**按出口 IP 共享**；本机装了
+        # 并登录 gh 的话，带上认证就是 5000 次/时。勾选框只管开关；
+        # 「现在是什么状态」由下面那行探测结果说（后台线程回填）。
+        ttk.Separator(glob, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=3, sticky=tk.EW, pady=6
+        )
+        row += 1
+        self.use_gh_auth_var = tk.BooleanVar(
+            value=self.config.get("use_gh_auth")
+        )
+        ttk.Checkbutton(
+            glob,
+            text=t("settings.use_gh_auth"),
+            variable=self.use_gh_auth_var,
+            command=self._on_gh_auth_toggled,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=3)
+        row += 1
+        _auto_wrap_hint(ttk.Label(
+            glob,
+            text=t("settings.hint.gh_auth"),
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
+        row += 1
+        # 探测结果（已登录 / 没登录 / 没装 gh / 已关闭）。也是 grid 布局，
+        # 文案会变，包 _auto_wrap_hint 换语言、拉窄窗口时能折行。
+        self.gh_auth_status_var = tk.StringVar()
+        _auto_wrap_hint(ttk.Label(
+            glob,
+            textvariable=self.gh_auth_status_var,
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
+        row += 1
+        if self.use_gh_auth_var.get():
+            self._start_gh_auth_probe()
+        else:
+            # 关着就不探测、不起子进程；这话也和「关了就不碰凭据」对上。
+            self.gh_auth_status_var.set(t("gh_auth.off"))
         # ---- 自定义启动参数 ----
         # ★ columnspan=3：这一帧有 3 列（标签 / 输入框 / 按钮），只盖 2 列的话
         #   分割线会在「按钮那一列的左边」断掉 —— 右边凭空少一截（量过：差 178 px）。
@@ -795,6 +836,42 @@ class MainMixin:
         except tk.TclError:                  # pragma: no cover - 控件已销毁
             pass
 
+    # ---- 「用 gh 认证」的设置页探测（工作线程 + run_on_gui 回填） ----
+
+    def _on_gh_auth_toggled(self) -> None:
+        """勾选框变了：开 → 探测给状态；关 → 直接写「已关闭」（不探测）。"""
+        if self.use_gh_auth_var.get():
+            self._start_gh_auth_probe()
+        else:
+            self.gh_auth_status_var.set(t("gh_auth.off"))
+
+    def _start_gh_auth_probe(self) -> None:
+        """后台探一次 gh 状态。起子进程的事不许放界面线程（见 ghauth）。"""
+        if self._gh_auth_probe_running:
+            return
+        self._gh_auth_probe_running = True
+        self.gh_auth_status_var.set(t("gh_auth.checking"))
+        self.executor.submit(self._gh_auth_probe_task)
+
+    def _gh_auth_probe_task(self) -> None:
+        # 工作线程：只跑 gh 子进程，绝不碰 tk 控件
+        try:
+            status = ghauth.refresh_status()
+        except Exception as e:                                # noqa: BLE001
+            # refresh_status 自己不抛；真出了意料之外的事也不能静默死掉
+            logger.error(f"gh 认证探测异常: {e}")
+            status = "missing"
+        self.run_on_gui(lambda: self._apply_gh_auth_status(status))
+
+    def _apply_gh_auth_status(self, status: str) -> None:
+        self._gh_auth_probe_running = False
+        if not self.use_gh_auth_var.get():
+            return      # 探测期间用户又把开关关掉了 —— 保持「已关闭」那句
+        self.gh_auth_status_var.set(t({
+            "ok": "gh_auth.ok",
+            "not-logged-in": "gh_auth.not_logged_in",
+        }.get(status, "gh_auth.missing")))
+
     def show_settings(self) -> None:
         if self._game_is_running():
             messagebox.showinfo(t("common.tip"), t("settings.game_running"))
@@ -935,6 +1012,7 @@ class MainMixin:
             "close_on_game_exit", self.close_on_game_exit_var.get()
         )
         self.config.set("github_mirror", mirror)
+        self.config.set("use_gh_auth", self.use_gh_auth_var.get())
         self.config.set("auto_update", self.auto_update_var.get())
         # 下拉框里是给人看的文案，存回配置要换回英文档位值；万一认不出
         # （理论上不会）就保持原值 —— 绝不写进去一个界面文案当档位。
@@ -1007,6 +1085,11 @@ class MainMixin:
             self.github_mirror_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["github_mirror"]
             )
+            self.use_gh_auth_var.set(
+                ConfigManager.GLOBAL_DEFAULTS["use_gh_auth"]
+            )
+            # 开关回到默认值，状态行也得跟着刷新（否则可能还停在「已关闭」）
+            self._on_gh_auth_toggled()
             self.auto_update_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["auto_update"]
             )

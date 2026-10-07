@@ -104,6 +104,9 @@ class CoreMixin:
         self._mirror_test_cur_started = 0.0
         self._mirror_test_canceling = False
         self._mirror_test_tick_job: str | None = None
+        # 「用 gh 认证」的设置页探测（gui_main）：同一时刻只跑一个探测线程，
+        # 免得来回点勾选框就把 gh 子进程刷出一串。
+        self._gh_auth_probe_running = False
         # 「正在启动游戏」的牌子。启动时要拼一个 100MB+ 的 jar，
         # 那是整套流程里最吃磁盘的一步；后台 GC 要扫 3 万多个对象，
         # 跟它抢盘只会两头都慢（实测并发时读对象 1.3s → 1.9s）。

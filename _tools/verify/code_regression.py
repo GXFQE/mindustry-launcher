@@ -1598,18 +1598,123 @@ def test_mirror_speed_test():
         check("结果回调抛异常同样被吞",
               len(got) == 1 and got[0].status == MT.STATUS_OK, str(got))
 
-        # ---- 中途取消：只交已测完的那部分 ----
+        # ---- 中途取消：当场收手，不再继续采样 ----
+        # ★ 采样改成**交错多轮**之后，取消的入口也得跟着换：on_result 现在要
+        #   等所有轮次跑完才发（见 test_mirrors 的 docstring），拿它当「测完
+        #   第一个就取消」的钩子已经不成立 —— 采样期间**实时**触发的是
+        #   on_progress。
         ev2 = threading.Event()
+        starts: list[str] = []
 
-        def cancel_after_first(_r):
-            ev2.set()       # 第一个测完立刻取消 —— 后面的不该再发请求
+        def cancel_on_first_sample(pfx, _n):
+            starts.append(pfx)
+            ev2.set()       # 第一枪刚打响就取消 —— 不该再有第二枪
 
         results = MT.test_mirrors(
             [base] * 4, test_url="blob", sample_bytes=64 * 1024,
-            on_result=cancel_after_first, stop_event=ev2,
+            on_progress=cancel_on_first_sample, stop_event=ev2,
         )
-        check("中途取消：只交已测完的那部分（不再发下一个请求）",
-              len(results) == 1, f"{len(results)}")
+        check("中途取消：当场收手，不再继续采样（只交已采到的那部分）",
+              len(results) == 1 and len(starts) == 1,
+              f"results={len(results)} 采样事件={len(starts)}")
+
+        # ---- ★ 交错采样：一轮里轮遍所有候选（2026-10-11 修的核心）----
+        # 用替身顶掉真正发请求的那一层：这里要验的是**调度顺序**，不是网络
+        # 行为（网络那几条上面已经单独验过）。替身还可以让「死候选」这种
+        # 分支变得确定 —— 不用真去连一个连不上的地址。
+        real_test_mirror = MT.test_mirror
+        calls: list[str] = []
+
+        def fake_ok(prefix, **_kw):
+            calls.append(prefix)
+            return MT.MirrorResult(prefix, MT.STATUS_OK, speed_bps=1000.0,
+                                   bytes_read=400_000, latency_ms=5.0)
+
+        try:
+            MT.test_mirror = fake_ok
+            got = MT.test_mirrors(["A", "B", "C"], rounds=3)
+        finally:
+            MT.test_mirror = real_test_mirror
+        check("★ 交错采样：一轮里轮遍所有候选，而不是把一个测到底"
+              "（顺序测量在抖动链路上量的是「当时网络好不好」）",
+              calls == ["A", "B", "C"] * 3, f"{calls}")
+        check("交错 N 轮之后，每个候选仍是**一条**聚合结果（顺序不变）",
+              [r.prefix for r in got] == ["A", "B", "C"], f"{got}")
+
+        # ---- 死掉的候选不参加后续轮次（别为它白等剩下的轮）----
+        calls2: list[str] = []
+
+        def fake_half_dead(prefix, **_kw):
+            calls2.append(prefix)
+            if prefix == "dead":
+                return MT.MirrorResult(prefix, MT.STATUS_NET)
+            return MT.MirrorResult(prefix, MT.STATUS_OK, speed_bps=1000.0,
+                                   bytes_read=400_000)
+
+        try:
+            MT.test_mirror = fake_half_dead
+            MT.test_mirrors(["live", "dead"], rounds=3)
+        finally:
+            MT.test_mirror = real_test_mirror
+        check("连不上的候选只测一次（后面几轮不再为它浪费时间）",
+              calls2 == ["live", "dead", "live", "live"], f"{calls2}")
+
+        # ---- ★ 聚合：多轮取中位（真的把「抽签」按下去的那一步）----
+        def _mk(pfx, sp):
+            return MT.MirrorResult(pfx, MT.STATUS_OK, speed_bps=sp,
+                                   bytes_read=1_000_000, latency_ms=10.0)
+
+        agg = MT._aggregate_samples("m", [_mk("m", 100.0), _mk("m", 900.0),
+                                          _mk("m", 110.0)])
+        check("★ 多轮聚合取中位（不是取最大、也不是取平均）",
+              agg.speed_bps == 110.0 and agg.samples == 3,
+              f"speed={agg.speed_bps} samples={agg.samples}")
+        check("聚合结果带上观测到的上下限与倍数（界面要提示波动）",
+              agg.speed_low_bps == 100.0 and agg.speed_high_bps == 900.0
+              and abs(agg.spread - 9.0) < 1e-9, f"spread={agg.spread}")
+
+        # ★ 上下限要连 timeout 一起看：本机链路实测的主模式是「一轮快
+        # （ok）、一轮慢到读不够（timeout）」交替 —— 只用 ok 样本算上下限
+        # 的话，慢的那轮根本进不来，spread 显示 1.0，「波动大」的提示
+        # 永远不出现（2026-10-11 深夜 C 段实测抓到）。
+        mixed = MT._aggregate_samples("x", [
+            _mk("x", 900.0),
+            MT.MirrorResult("x", MT.STATUS_TIMEOUT, speed_bps=30.0,
+                            bytes_read=30_000),
+            _mk("x", 800.0),
+        ])
+        check("★ 中位只用 ok 样本，上下限连 timeout 一起看（快/慢交替＝波动要看得见）",
+              mixed.speed_bps == 800.0 and mixed.samples == 2
+              and abs(mixed.spread - 30.0) < 1e-9,
+              f"med={mixed.speed_bps} samples={mixed.samples} "
+              f"spread={mixed.spread}")
+
+        # ★ 偶数个样本取**下中位**（两个样本时报较慢那个）：宁可低估 ——
+        # 报高了会让用户照着选一个其实更慢的镜像。3 样本（常态）不受影响。
+        two = MT._aggregate_samples("y", [_mk("y", 500.0), _mk("y", 100.0)])
+        check("★ 偶数样本取「下中位」＝保守那一个（别高估典型速度）",
+              two.speed_bps == 100.0, f"speed={two.speed_bps}")
+
+        spiky = MT._aggregate_samples("s", [_mk("s", 100.0), _mk("s", 900.0),
+                                            _mk("s", 100.0)])
+        steady = MT._aggregate_samples("t", [_mk("t", 300.0), _mk("t", 300.0),
+                                             _mk("t", 300.0)])
+        order_spiky = [x.prefix for x in MT.sorted_results([spiky, steady])]
+        check("★ 尖峰型（100/900/100）排不过稳定型（300/300/300）"
+              " —— 单次抽样时它俩谁前谁后全看运气",
+              order_spiky == ["t", "s"],
+              f"{order_spiky}（spiky={spiky.speed_bps} "
+              f"steady={steady.speed_bps}）")
+
+        check("一条可用样本都没有时，报最后一次采样的状态（连不上/404…）",
+              MT._aggregate_samples("x", [
+                  MT.MirrorResult("x", MT.STATUS_TIMEOUT, bytes_read=1000),
+                  MT.MirrorResult("x", MT.STATUS_NET),
+              ]).status == MT.STATUS_NET)
+
+        check("采样窗口是「时长为主控 + 字节上限」两个帽，且至少两轮",
+              0 < MT.SAMPLE_SECONDS <= 10 and MT.ROUNDS >= 2,
+              f"{MT.SAMPLE_SECONDS}s × {MT.ROUNDS} 轮")
 
         # ---- 排序：可用的在前且按速度降序；不可用的垫底 ----
         made = [

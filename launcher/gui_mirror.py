@@ -13,10 +13,15 @@
   * 结果窗同时只能开一个；测速期间按钮变成「取消」，点它就收手
     （每个候选最多多等一次 socket 超时，见 mirrortest.SOCKET_TIMEOUT）。
 
-进度显示（设置页那一条 + 进度条）：条的最大刻度 = 候选数，读数 = 已测完
-+ 当前候选的字节比例；文字带「已用 n 秒」的秒表（ticker 每 250 ms 一跳），
+进度显示（设置页那一条 + 进度条）：★ 采样是**交错多轮**的（见 mirrortest），
+所以刻度按**采样次数**算（候选数 × 轮数），读数 = 已跑完的采样 + 当前这一次
+已用的时间比例；文字带「已用 n 秒」的秒表（ticker 每 250 ms 一跳），
 单个候选卡在「连接 / 等首字节」时也不会看起来像死掉。数据源是 mirrortest
-的 ``on_progress`` 回调，本层只负责显示与收放。
+的 ``on_progress`` 回调（每次采样都以一条 0 字节的「开测」事件开头，本层靠
+它数采样次数），本层只负责显示与收放。
+
+⚠️ ``on_result`` 改成等**所有轮次跑完**才逐条到达（交错采样的必然结果，
+见 mirrortest 模块 docstring）—— 别拿它当进度源，进度一律看 ``on_progress``。
 """
 from __future__ import annotations
 
@@ -54,14 +59,15 @@ class MirrorTestMixin:
         # 每一轮都是新的取消信号：上一轮 set 过的 Event 不能带过来
         #（否则新线程一进循环就判「已取消」，秒退）。
         self._mirror_test_cancel = threading.Event()
-        # 进度显示的初态：0/总数、还没有「当前候选」
+        # 进度显示的初态：采样 0 / (候选数 × 轮数)、还没有「当前采样」。
+        # 轮数固定取 mirrortest.ROUNDS（测试替身不走这个数，所以这只是显示用的刻度）。
         self._mirror_test_total = total
-        self._mirror_test_finished = 0
+        self._mirror_test_rounds = max(1, mirrortest.ROUNDS)
+        self._mirror_test_samples = 0
         self._mirror_test_cur_prefix = None
-        self._mirror_test_cur_bytes = 0
         self._mirror_test_canceling = False
         self._set_mirror_test_button(t("common.cancel"))
-        self._mirror_test_refresh_progress()     # 提示行 =「正在测速…（0/N）」
+        self._mirror_test_refresh_progress()     # 提示行 =「正在测速…（0/采样总数）」
         self._mirror_test_set_progress_visible(True)
         self._mirror_test_thread = threading.Thread(
             target=self._mirror_test_task,
@@ -97,19 +103,18 @@ class MirrorTestMixin:
     # ---------- 后台线程 ----------
 
     def _mirror_test_task(self, targets: list[str], total: int) -> None:
-        """后台线程：串行测完所有候选（这里唯一碰网络的地方）。"""
-        thread = threading.current_thread()
-        done = 0
+        """后台线程：交错多轮测完所有候选（这里唯一碰网络的地方）。
 
-        def on_result(_result: mirrortest.MirrorResult) -> None:
-            nonlocal done
-            done += 1
-            n = done
-            self.run_on_gui(lambda: self._mirror_test_progress_result(thread, n))
+        ⚠️ 不接 ``on_result``：交错采样下它要**所有轮次跑完**才逐条到达，
+        拿它画进度会「全程 0、末尾连跳 N 格」。进度只看 ``on_progress``
+        —— 每次采样都以一条 0 字节的「开测」事件开头（mirrortest 的契约）。
+        """
+        thread = threading.current_thread()
 
         def on_progress(prefix: str, nbytes: int) -> None:
-            # 每个候选先来一条 0（开测），之后按块报 —— 界面靠它把进度条
-            # 画细、把「已用时间」的秒表切到这个候选上。
+            # 0 字节 = 一次采样的第一枪（连接都还没开始）：界面靠它数采样
+            # 次数、把秒表切到这一次采样上。非零事件本层不消费（刻度按
+            # 时间比例画）。
             self.run_on_gui(
                 lambda: self._mirror_test_progress_bytes(thread, prefix, nbytes)
             )
@@ -120,7 +125,6 @@ class MirrorTestMixin:
         try:
             results = mirrortest.test_mirrors(
                 targets,
-                on_result=on_result,
                 on_progress=on_progress,
                 stop_event=stop,
             )
@@ -153,7 +157,6 @@ class MirrorTestMixin:
         self._mirror_test_stop_ticker()
         self._mirror_test_canceling = False
         self._mirror_test_cur_prefix = None
-        self._mirror_test_cur_bytes = 0
         self._mirror_test_set_progress_visible(False)
         self._set_mirror_test_button(t("settings.mirror_test"))
         if not results:
@@ -167,7 +170,12 @@ class MirrorTestMixin:
         ordered = mirrortest.sorted_results(results)
         best = next((r for r in ordered if r.ok), None)
         if best is not None:
-            self.mirror_test_var.set(t("mirror_test.summary",
+            # 抖动链路上第一名的观测极差可能很大 —— 那时「最快」只在本次
+            # 排序里成立，提示行里就别说成定论（见 mirrortest.SPREAD_WARN）。
+            key = ("mirror_test.summary_unstable"
+                   if best.spread >= mirrortest.SPREAD_WARN
+                   else "mirror_test.summary")
+            self.mirror_test_var.set(t(key,
                                        name=self._mirror_display_name(best.prefix),
                                        speed=mirrortest.format_speed(best.speed_bps)))
         else:
@@ -179,59 +187,66 @@ class MirrorTestMixin:
     def _mirror_test_progress_bytes(
         self, thread: threading.Thread, prefix: str, nbytes: int
     ) -> None:
-        """后台报来的「某候选读到 n 字节」（已经转回 GUI 线程）。"""
-        if thread is not self._mirror_test_thread:
-            return          # 上一轮姗姗来迟的事件：别拿旧字节盖新一轮的条
-        if prefix != self._mirror_test_cur_prefix:
-            # 换候选了：秒表的起点跟着挪。连不上的候选也走这儿 ——
-            # mirrortest 对每个候选都会先发一条 0 字节的「开测」事件。
-            self._mirror_test_cur_prefix = prefix
-            self._mirror_test_cur_started = time.monotonic()
-        self._mirror_test_cur_bytes = nbytes
-        self._mirror_test_refresh_progress()
+        """后台报来的「某次采样开跑 / 读到 n 字节」（已经转回 GUI 线程）。
 
-    def _mirror_test_progress_result(
-        self, thread: threading.Thread, done: int
-    ) -> None:
-        """后台报来的「一个候选测完了」（已经转回 GUI 线程）。"""
+        刻度按「采样次数 + 当前这次的时间比例」画（见 refresh_progress），
+        所以只有 ``nbytes == 0`` 那一枪（每次采样的开头都是它，见
+        mirrortest 的契约）需要处理；非零的块级事件现在不消费 —— 采样
+        窗口由 SAMPLE_SECONDS 主导，字节数对刻度没有贡献。
+        """
         if thread is not self._mirror_test_thread:
+            return          # 上一轮姗姗来迟的事件：别拿旧事件盖新一轮的条
+        if nbytes > 0:
             return
-        self._mirror_test_finished = done
-        self._mirror_test_cur_prefix = None
-        self._mirror_test_cur_bytes = 0
+        # ⚠️ 判据是「0 字节」，不是「前缀变了」—— 交错多轮下同一个候选
+        #    会跨轮连着被测，光看前缀认不出「又开了一枪」。
+        self._mirror_test_samples += 1
+        self._mirror_test_cur_prefix = prefix
+        self._mirror_test_cur_started = time.monotonic()
         self._mirror_test_refresh_progress()
 
     def _mirror_test_refresh_progress(self) -> None:
         """把当前进度画到提示行 + 进度条上（只能在 GUI 线程调）。
 
-        进度条的最大刻度 = 候选数，读数 = 已测完 + 当前候选的字节比例；
+        ★ 刻度按**采样次数**算（候选数 × 轮数）—— 交错采样把「一个候选
+        测完再测下一个」的节奏打散了，按候选数画会和真实进度对不上。
+        读数 = 已开跑的采样数 - 1（当前这个还没完）+ 当前这次已用的
+        时间比例（采样窗口由 SAMPLE_SECONDS 主导，见 mirrortest）；
         文字里带「已用 n 秒」的秒表（ticker 每 250 ms 刷一次）—— 单个
         候选卡在连接 / 等首字节时条不动，秒表还在跳，看得出没死。
         """
-        total = self._mirror_test_total
+        samples_total = max(
+            1, self._mirror_test_total * max(1, self._mirror_test_rounds)
+        )
+        live = self._mirror_test_cur_prefix is not None
+        # 死候选会中途退出后续轮次（见 mirrortest），实际采样数可能到不了
+        # 刻度上限 —— 到不了就到不了，收尾时进度条反正会被收回。
+        cur_no = min(self._mirror_test_samples, samples_total)
+        elapsed = 0.0
+        if live:
+            elapsed = max(0.0, time.monotonic() - self._mirror_test_cur_started)
         if self._mirror_test_canceling:
             text = t("mirror_test.canceling")
-        elif self._mirror_test_cur_prefix is None:
+        elif not live:
+            # 还没有采样开跑（刚点下 / 被取消之后）或上一枪已收尾：
+            # 报「已跑完的采样数」。
             text = t("mirror_test.running",
-                     done=self._mirror_test_finished, total=total)
+                     done=max(0, cur_no - 1), total=samples_total)
         else:
-            elapsed = max(0.0, time.monotonic() - self._mirror_test_cur_started)
             text = t("mirror_test.testing",
-                     current=self._mirror_test_finished + 1, total=total,
+                     current=cur_no, total=samples_total,
                      name=self._mirror_display_name(self._mirror_test_cur_prefix),
                      elapsed=f"{elapsed:.1f}")
         self.mirror_test_var.set(text)
         frac = 0.0
-        if self._mirror_test_cur_prefix is not None:
-            # 0.99 封顶：样本读满了也别提前显示成「整格完」——那一格要等
-            # 结果事件（finished+1）才落地。
-            frac = min(
-                self._mirror_test_cur_bytes / max(1, mirrortest.SAMPLE_BYTES),
-                0.99,
-            )
+        if live:
+            # 0.95 封顶：这一次采样读满了也别提前显示成「整格完」——
+            # 那一格要等下一次「开测」事件（采样数 +1）才落地。
+            frac = min(elapsed / max(0.1, mirrortest.SAMPLE_SECONDS), 0.95)
         try:
             self.mirror_progress.configure(
-                maximum=max(1, total), value=self._mirror_test_finished + frac
+                maximum=samples_total,
+                value=max(0, cur_no - 1) + frac,
             )
         except tk.TclError:
             logger.debug("测速进度条不存在（设置页被重建过），跳过读数")
@@ -301,13 +316,23 @@ class MirrorTestMixin:
         body.pack(fill=tk.BOTH, expand=True)
         intro = t(
             "mirror_test.intro",
-            size=mirrortest.format_size(mirrortest.SAMPLE_BYTES),
+            seconds=f"{mirrortest.SAMPLE_SECONDS:g}",
+            rounds=mirrortest.ROUNDS,
         )
         if canceled:
             intro += t("mirror_test.partial", n=max(0, total - len(ordered)))
         ttk.Label(
             body, text=intro, wraplength=600, justify=tk.LEFT, anchor=tk.W
         ).pack(fill=tk.X)
+        if any(r.ok and r.spread >= mirrortest.SPREAD_WARN for r in ordered):
+            # 抖动大时「排名」不是定论 —— 在表上面就说清楚，别让用户拿
+            # 「第一名」当承诺（判据见 mirrortest.SPREAD_WARN）。
+            ttk.Label(
+                body,
+                text=t("mirror_test.unstable_note",
+                       x=f"{mirrortest.SPREAD_WARN:g}"),
+                wraplength=600, justify=tk.LEFT, anchor=tk.W,
+            ).pack(fill=tk.X, pady=(4, 0))
 
         table = ttk.Frame(body)
         table.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
@@ -412,6 +437,10 @@ class MirrorTestMixin:
 
     def _mirror_status_text(self, r: mirrortest.MirrorResult) -> str:
         if r.status == mirrortest.STATUS_OK:
+            if r.spread >= mirrortest.SPREAD_WARN:
+                # 多轮之间极差很大：结果是有效的，但名次只在本次成立
+                return t("mirror_test.status.ok_unstable",
+                         spread=f"{r.spread:.0f}")
             return t("mirror_test.status.ok")
         if r.status == mirrortest.STATUS_TIMEOUT:
             return t("mirror_test.status.timeout")

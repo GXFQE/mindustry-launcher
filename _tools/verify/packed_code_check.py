@@ -299,6 +299,12 @@ REQUIRED = {
         # 不能算「快」）、单候选总预算、候选上限（清单来自 config.json）
         "TEST_URL", "SAMPLE_BYTES", "MIN_OK_BYTES", "MIRROR_BUDGET",
         "SOCKET_TIMEOUT", "MAX_TARGETS", "UNVERIFIED_SSL_CTX",
+        # ★ 2026-10-11 测速方法学改造：交错多轮（ROUNDS）+ 固定时长采样
+        # （SAMPLE_SECONDS）+ 取中位（_aggregate_samples）+ 死候选退出
+        # （_DEAD_STATUSES）+ 波动提示阈值（SPREAD_WARN）。少了这些 =
+        # exe 还是「顺序测一遍、谁前谁后看运气」的旧版本（见 REF §十七）。
+        "SAMPLE_SECONDS", "ROUNDS", "SPREAD_WARN", "_DEAD_STATUSES",
+        "_aggregate_samples",
     ],
     "launcher.gui_mirror": [
         "MirrorTestMixin", "mirror_test_click",

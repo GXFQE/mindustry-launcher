@@ -897,7 +897,10 @@ def main() -> int:
                     break
                 if on_progress is not None:
                     on_progress(p, 0)                       # 「开测」事件
-                    on_progress(p, MT.SAMPLE_BYTES // 2)    # 读到一半
+                    # ★ 界面靠 0 事件数「采样次数」画进度（0 开头是 mirrortest
+                    #   的契约，真实现每轮都发）；非零的块级事件界面不消费 ——
+                    #   发一发只证明「收到了也不炸」。
+                    on_progress(p, MT.SAMPLE_BYTES // 2)
                 time.sleep(0.4)     # 留出观察进度条的窗口（见 probe_running）
                 r = MT.MirrorResult(
                     prefix=p, status=MT.STATUS_OK,
@@ -922,11 +925,14 @@ def main() -> int:
             条的读数是「后台事件 → run_on_gui → 刷控件」推出来的，头几轮
             事件到齐前可能还是 0 —— 没看到就稍后再看一眼（最多 ~1.2 s）。
             假实现每个候选停 0.4 s、共 3 个，窗口足够大。
+            刻度 = 候选数 × mirrortest.ROUNDS（采样次数），读数 = 已跑完的
+            采样 + 当前这次的时间比例 —— 假实现不分轮，只走到 1/3 左右。
             """
             bar = getattr(app, "mirror_progress", None)
             try:
                 visible = bar is not None and bool(bar.winfo_ismapped())
                 value = float(bar["value"]) if bar is not None else 0.0
+                maximum = float(bar["maximum"]) if bar is not None else 0.0
             except tk.TclError:
                 return
             if not (visible and value > 0) and int(running["tries"]) < 20:
@@ -935,6 +941,7 @@ def main() -> int:
                 return
             running["visible"] = visible
             running["value"] = value
+            running["maximum"] = maximum
             running["text"] = app.mirror_test_var.get()
 
         def probe_dialog() -> None:
@@ -970,10 +977,10 @@ def main() -> int:
             pump(app, 8.0)
         check("点「测速」后结果窗弹了出来（探针跑完了）",
               picked["done"] is True, str(picked))
-        check("★ 测速中：进度条摆出来、读数随字节推进（看着不像卡住）",
+        check("★ 测速中：进度条摆出来、读数随采样推进（看着不像卡住）",
               running.get("visible") is True
               and isinstance(running.get("value"), float)
-              and 0 < float(running["value"]) < 3,
+              and 0 < float(running["value"]) < float(running.get("maximum", 0)),
               str(running))
         check("测速中：提示行点名「正在测哪个」+ 已用时间秒表",
               "正在测速" in str(running.get("text", ""))

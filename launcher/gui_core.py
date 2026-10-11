@@ -95,12 +95,14 @@ class CoreMixin:
         self._mirror_test_win = None
         self._mirror_test_thread: threading.Thread | None = None
         self._mirror_test_cancel = threading.Event()
-        # 测速进度显示的状态（gui_mirror）：条 = 已测完 + 当前候选字节比例，
-        # 文字 = 候选名 + 已用秒（ticker 每 250 ms 刷）。只在 GUI 线程读写。
+        # 测速进度显示的状态（gui_mirror）：★ 采样是交错多轮的，所以刻度按
+        # **采样次数**算（候选数 × 轮数）——「已开跑的采样数 + 当前这次的时间
+        # 比例」；文字 = 采样序号 + 候选名 + 已用秒（ticker 每 250 ms 刷）。
+        # 只在 GUI 线程读写。
         self._mirror_test_total = 0
-        self._mirror_test_finished = 0
+        self._mirror_test_rounds = 1
+        self._mirror_test_samples = 0
         self._mirror_test_cur_prefix: str | None = None
-        self._mirror_test_cur_bytes = 0
         self._mirror_test_cur_started = 0.0
         self._mirror_test_canceling = False
         self._mirror_test_tick_job: str | None = None

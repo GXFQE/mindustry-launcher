@@ -1215,12 +1215,15 @@ def test_mirror_and_log_keep():
     from launcher.config import (
         DEFAULT_MIRROR,
         DEFAULT_MIRROR_PRESETS,
+        DEFAULT_MIRROR_ROUNDS,
         MAX_LOG_KEEP,
         MAX_MIRROR_PRESETS,
+        MAX_MIRROR_ROUNDS,
         ConfigManager,
         normalize_log_keep,
         normalize_mirror,
         normalize_mirror_presets,
+        normalize_mirror_rounds,
     )
 
     check("默认镜像就是原来写死的那个地址（行为不变）",
@@ -1254,6 +1257,17 @@ def test_mirror_and_log_keep():
         got = normalize_log_keep(raw)
         check(f"保留份数 {raw!r} → {want}", got == want, f"得到 {got}")
 
+    # ---- 测速轮数（mirror_test_rounds）：设置页可调，1~3 ----
+    # 它直接决定测速的等待时长（采样总数 = 候选数 × 轮数），脏值不许崩。
+    for raw, want in [(1, 1), (3, 3), ("2", 2), (0, 1), (-5, 1),
+                      (99, MAX_MIRROR_ROUNDS), ("abc", 3), (None, 3)]:
+        got = normalize_mirror_rounds(raw)
+        check(f"测速轮数 {raw!r} → {want}", got == want, f"得到 {got}")
+    check("测速轮数默认 3（改造前的默认行为不变）",
+          DEFAULT_MIRROR_ROUNDS == 3
+          and ConfigManager.GLOBAL_DEFAULTS["mirror_test_rounds"] == 3,
+          f"default={DEFAULT_MIRROR_ROUNDS}")
+
     # ★ 退默认时**必须点名配置键名**：这一项就是「想改就手改 config.json」
     #   的那一类，告警里没有 `max_log_files` 这个字符串，用户就没法拿它去
     #   文件里找是哪一行（2026-09-22 重写强转层时丢过一次，是 exe 边界
@@ -1269,6 +1283,16 @@ def test_mirror_and_log_keep():
         _cfg_log.removeHandler(_h)
     check("脏保留份数的告警点名了配置键 max_log_files",
           any("max_log_files" in m for m in _msgs), str(_msgs))
+
+    # 测速轮数同样要「退默认时点名键名」（走的是同一张规格表）
+    _msgs.clear()
+    _cfg_log.addHandler(_h)
+    try:
+        normalize_mirror_rounds("一大堆")
+    finally:
+        _cfg_log.removeHandler(_h)
+    check("脏测速轮数的告警点名了配置键 mirror_test_rounds",
+          any("mirror_test_rounds" in m for m in _msgs), str(_msgs))
 
     # ---- 下拉框的候选镜像站也进了 config.json（github_mirror_presets）----
     # 这一项存在的理由就是「让人手改配置文件」，所以脏成什么样都不许崩。
@@ -1640,6 +1664,23 @@ def test_mirror_speed_test():
               calls == ["A", "B", "C"] * 3, f"{calls}")
         check("交错 N 轮之后，每个候选仍是**一条**聚合结果（顺序不变）",
               [r.prefix for r in got] == ["A", "B", "C"], f"{got}")
+
+        # 轮数由调用方传进来（GUI 从设置项 mirror_test_rounds 读出）：
+        # 1 轮 = 每条候选只采一次（设置页最低档），不是「照常量跑满」。
+        calls1: list[str] = []
+
+        def fake_once(prefix, **_kw):
+            calls1.append(prefix)
+            return MT.MirrorResult(prefix, MT.STATUS_OK, speed_bps=1000.0,
+                                   bytes_read=400_000)
+
+        try:
+            MT.test_mirror = fake_once
+            got1 = MT.test_mirrors(["A", "B"], rounds=1)
+        finally:
+            MT.test_mirror = real_test_mirror
+        check("★ 轮数=1（设置页最低档）：每个候选只采一次",
+              calls1 == ["A", "B"] and len(got1) == 2, f"{calls1}")
 
         # ---- 死掉的候选不参加后续轮次（别为它白等剩下的轮）----
         calls2: list[str] = []

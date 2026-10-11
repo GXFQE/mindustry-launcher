@@ -889,8 +889,13 @@ def main() -> int:
             "": 60_000.0,
         }
 
+        seen_rounds: dict[str, object] = {}
+
         def fake_test_mirrors(prefixes, *, on_result=None, stop_event=None,
                               on_progress=None, **kwargs):
+            # ★ 界面从设置项读出轮数后随调用传下来 —— 记下来给下面的断言用
+            #   （假核心不分轮，只验「传没传、传得对不对」）。
+            seen_rounds["v"] = kwargs.get("rounds")
             out = []
             for p in prefixes:
                 if stop_event is not None and stop_event.is_set():
@@ -915,6 +920,23 @@ def main() -> int:
         MT.test_mirrors = fake_test_mirrors
         test_btn = find_widget(app.settings_frame, "测速")
         check("设置页里有「测速」按钮", test_btn is not None)
+        # 测速轮数控件：按 textvariable 定位（同下拉框那一套，不靠顺序 ——
+        # 设置页里「日志保留份数」也是 Spinbox，按下标会指错人）
+        rounds_box = None
+        for w in walk_by_kind(app.settings_frame, (ttk.Spinbox,)):
+            try:
+                if str(w.cget("textvariable")) == str(app.mirror_test_rounds_var):
+                    rounds_box = w
+                    break
+            except tk.TclError:
+                continue
+        check("设置页有「测速轮数」控件（按 textvariable 定位）",
+              rounds_box is not None)
+        check("它显示的默认值 == 配置里的值（默认 3）",
+              app.mirror_test_rounds_var.get()
+              == app.config.get("mirror_test_rounds"),
+              f"{app.mirror_test_rounds_var.get()!r} / "
+              f"{app.config.get('mirror_test_rounds')!r}")
         picked: dict[str, object] = {"done": False, "attempts": 0}
 
         running: dict[str, object] = {"tries": 0}
@@ -925,8 +947,9 @@ def main() -> int:
             条的读数是「后台事件 → run_on_gui → 刷控件」推出来的，头几轮
             事件到齐前可能还是 0 —— 没看到就稍后再看一眼（最多 ~1.2 s）。
             假实现每个候选停 0.4 s、共 3 个，窗口足够大。
-            刻度 = 候选数 × mirrortest.ROUNDS（采样次数），读数 = 已跑完的
-            采样 + 当前这次的时间比例 —— 假实现不分轮，只走到 1/3 左右。
+            刻度 = 候选数 × 设置轮数（采样次数，见 mirror_test_rounds），
+            读数 = 已跑完的采样 + 当前这次的时间比例 —— 假实现不分轮，
+            只走到 1/3 左右。
             """
             bar = getattr(app, "mirror_progress", None)
             try:
@@ -977,6 +1000,10 @@ def main() -> int:
             pump(app, 8.0)
         check("点「测速」后结果窗弹了出来（探针跑完了）",
               picked["done"] is True, str(picked))
+        check("★ 测速用的是设置项里的轮数（假核心收到的 rounds == 配置值）",
+              seen_rounds.get("v") == app.config.get("mirror_test_rounds"),
+              f"收到 {seen_rounds.get('v')!r} / "
+              f"配置 {app.config.get('mirror_test_rounds')!r}")
         check("★ 测速中：进度条摆出来、读数随采样推进（看着不像卡住）",
               running.get("visible") is True
               and isinstance(running.get("value"), float)

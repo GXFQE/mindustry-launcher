@@ -70,6 +70,9 @@ launcher.log    the launcher's own log — look here first when something goes w
   being tested**, so it never looks stuck); **Use fastest** fills the winner back
   into the setting. Line quality varies by ISP and region, so the order of the
   dropdown means nothing.
+- **Test rounds** — 1 to 3 (default 3). Every round tests each candidate once
+  (total samples = candidates × rounds), so more rounds = steadier ranking but
+  longer waits. Turn it down to 2 or 1 if speed matters more.
 - **Use GitHub CLI authentication** — off by default. If GitHub CLI (`gh`) is
   installed and logged in, tick it and GitHub requests get authenticated: the API
   quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in memory

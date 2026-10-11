@@ -248,6 +248,13 @@ DEFAULT_MIRROR_PRESETS = [
 # 兜个上限：配置文件是给人手改的，写进去几百项只会把下拉框撑爆
 MAX_MIRROR_PRESETS = 20
 
+# ★ 测速时每个候选采几轮（见 mirrortest）：交错多轮，采得越少越快、
+#   越多越稳。1 轮 = 每条候选只抽 1 次样本，抖动链路上排名近似抽签；
+#   3 轮 = 取中位，抗单次尖峰。上限定 3：再多对「谁最快」这个结论收益
+#   极小，而等待随候选数线性变长（5 候选 × 3 轮实测约 70 秒）。
+DEFAULT_MIRROR_ROUNDS = 3
+MAX_MIRROR_ROUNDS = 3
+
 # logs/ 里最多留几份游戏日志（更旧的送回收站，见 gamelog.GameLog._prune）。
 # 上限只是防止有人填个天文数字把目录塞爆；下限定在 1，因为 0 会让刚写的
 # 那一份当场被自己删掉。
@@ -302,6 +309,23 @@ def normalize_mirror_presets(raw: Any) -> list[str]:
         logger.warning(f"镜像可选项 {raw!r} 不可用，改用内置默认列表")
         return list(DEFAULT_MIRROR_PRESETS)
     return items[:MAX_MIRROR_PRESETS]
+
+
+def normalize_mirror_rounds(raw: Any, *, what: str = "mirror_test_rounds") -> int:
+    """测速轮数：非整数退回默认，超范围夹到区间内（不抛异常）。
+
+    ``what`` 只是给 WARNING 用的，**默认就填配置键名**：这一项同样可以
+    手改 config.json，告警里点名键名，用户才能拿它去文件里找到是哪一行
+    （同 ``normalize_log_keep`` / ``normalize_bool`` 的路子）。
+    """
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"配置项 {what}={raw!r} 不是整数，按默认 {DEFAULT_MIRROR_ROUNDS} 处理"
+        )
+        return DEFAULT_MIRROR_ROUNDS
+    return max(1, min(n, MAX_MIRROR_ROUNDS))
 
 
 def normalize_log_keep(raw: Any, *, what: str = "max_log_files") -> int:
@@ -378,6 +402,10 @@ class ConfigManager:
         # 它跟 github_mirror 一样会被存进 config.json，所以「恢复默认设置」
         # 不会动它 —— 那是用户的候选清单，不是界面上的临时勾选。
         "github_mirror_presets": list(DEFAULT_MIRROR_PRESETS),
+        # ★ 「测速」每个候选采几轮（设置页可调，1~3）。默认 3：抖动
+        #   链路上单轮排名近似抽签（2026-10-11 实测），中位聚合要它兜底；
+        #   嫌慢就调低 —— 采样总数 = 候选数 × 轮数，直接决定等待时长。
+        "mirror_test_rounds": DEFAULT_MIRROR_ROUNDS,
         # ★ 是否复用本机 GitHub CLI（gh）的登录态：检测到已登录的 gh 时，
         #   发往 GitHub 官方域名的请求会带上认证 —— API 额度从 60 次/时
         #   （按出口 IP 共享）提高到 5000 次/时。关掉 = 从不使用。
@@ -461,6 +489,7 @@ class ConfigManager:
         "github_mirror": normalize_mirror,
         "github_mirror_presets": normalize_mirror_presets,
         "max_log_files": normalize_log_keep,
+        "mirror_test_rounds": normalize_mirror_rounds,
         "version_sources": _sources.normalize_version_sources,
         # 三档枚举（auto/check/off）。解析函数在 utils 而不是 selfupdate ——
         # 那边要 import 本模块，写那边会绕成循环 import。

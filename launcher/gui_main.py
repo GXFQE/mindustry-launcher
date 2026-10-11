@@ -7,9 +7,11 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from .config import (
     MAX_LOG_KEEP,
+    MAX_MIRROR_ROUNDS,
     ConfigManager,
     normalize_log_keep,
     normalize_mirror,
+    normalize_mirror_rounds,
 )
 from . import ghauth
 from .gamecmd import check_extra_args, probe_java, split_args
@@ -31,6 +33,7 @@ def _settings_label_texts() -> tuple[str, ...]:
         t("settings.label.min_playtime"),
         t("settings.label.max_backups"),
         t("settings.label.mirror"),
+        t("settings.label.mirror_rounds"),
         t("settings.label.extra_vm"),
         t("settings.label.extra_prog"),
         t("settings.label.max_logs"),
@@ -537,6 +540,34 @@ class MainMixin:
             foreground="#777777",
         )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
         row += 1
+        # 测速轮数（1~3）：直接决定测速的等待时长 —— 采样总数 = 候选数 ×
+        # 轮数（见 mirrortest）。1 轮最快但抖动链路下排名近似抽签，3 轮
+        # 取中位最稳；嫌慢就调低。样式跟「日志保留份数」一个格局：控件和
+        # 说明挤在同一格（columnspan=2，右边缘跟上面两个输入框对齐）。
+        ttk.Label(glob, text=t("settings.label.mirror_rounds")).grid(
+            row=row, column=0, sticky=tk.W, pady=(3, 5)
+        )
+        self.mirror_test_rounds_var = tk.IntVar(
+            value=self.config.get("mirror_test_rounds")
+        )
+        rounds_row = ttk.Frame(glob)
+        rounds_row.grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW, padx=5, pady=(3, 5)
+        )
+        ttk.Spinbox(
+            rounds_row,
+            from_=1,
+            to=MAX_MIRROR_ROUNDS,
+            textvariable=self.mirror_test_rounds_var,
+            width=10,
+        ).pack(side=tk.LEFT)
+        _auto_wrap_hint(ttk.Label(
+            rounds_row,
+            text=t("settings.hint.mirror_rounds"),
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
+        row += 1
         # 测速的进度 / 结论（平时是一句「怎么用」的提示）。★ 文案会变，
         # 但也得包 _auto_wrap_hint —— 换个语言、窗口拉窄时同样要能折行。
         self.mirror_test_var = tk.StringVar(value=t("settings.hint.mirror_test"))
@@ -770,6 +801,9 @@ class MainMixin:
             self.config.get("close_on_game_exit")
         )
         self.github_mirror_var.set(self.config.get("github_mirror"))
+        self.mirror_test_rounds_var.set(
+            self.config.get("mirror_test_rounds")
+        )
         self.auto_update_var.set(self.config.get("auto_update"))
         self.launcher_update_var.set(
             launcher_update_label(self.config.get("launcher_update"))
@@ -971,6 +1005,17 @@ class MainMixin:
                 t("err.logs_body", max=MAX_LOG_KEEP),
             )
             return False
+        try:
+            mirror_rounds = normalize_mirror_rounds(
+                self.mirror_test_rounds_var.get(), what="测速轮数"
+            )
+        except tk.TclError as e:
+            logger.warning(f"测速轮数不合法: {e}")
+            messagebox.showerror(
+                t("err.rounds_title"),
+                t("err.rounds_body", max=MAX_MIRROR_ROUNDS),
+            )
+            return False
         warnings = check_extra_args(extra_vm_args)
         if warnings and not messagebox.askyesno(
             t("warn.args_title"),
@@ -1028,6 +1073,7 @@ class MainMixin:
         self.config.set("extra_program_args", extra_prog_text.strip())
         self.config.set("save_game_log", self.save_game_log_var.get())
         self.config.set("max_log_files", max_log_files)
+        self.config.set("mirror_test_rounds", mirror_rounds)
         self.config.set(
             "permanent_delete", self.permanent_delete_var.get()
         )
@@ -1109,6 +1155,9 @@ class MainMixin:
             )
             self.max_log_files_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["max_log_files"]
+            )
+            self.mirror_test_rounds_var.set(
+                ConfigManager.GLOBAL_DEFAULTS["mirror_test_rounds"]
             )
             self.permanent_delete_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["permanent_delete"]

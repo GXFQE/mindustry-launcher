@@ -165,6 +165,10 @@ REQUIRED = {
         # 下拉框的候选清单也进 config.json 了（github_mirror_presets）
         "normalize_mirror_presets", "MAX_MIRROR_PRESETS",
         "normalize_log_keep", "MAX_LOG_KEEP",
+        # 2026-10-11：测速轮数做成设置项（1~3，默认 3）—— 同样是「带默认
+        # 值的键，不涨 config_version」（同下面 language 那一条）
+        "normalize_mirror_rounds", "DEFAULT_MIRROR_ROUNDS",
+        "MAX_MIRROR_ROUNDS",
         # ★ 开关型不能走 type(bool)(值)：bool("false") 是 True
         "normalize_bool",
         # 2026-09-19：删除方式开关 + 统一删除入口（默认回收站，开了才硬删）
@@ -188,6 +192,8 @@ REQUIRED = {
         "open_log_window",
         # 镜像地址 + 日志保留份数；两帧共用一个标签列宽（输入框才对得齐）
         "github_mirror_var", "max_log_files_var", "normalize_mirror",
+        # 2026-10-11：测速轮数（采样总数 = 候选数 × 轮数，直接决定等待）
+        "mirror_test_rounds_var", "normalize_mirror_rounds",
         "_label_col_width",
         # 2026-10-05：界面文案接进语言包。原来写死的两个模块级常量
         # （SETTINGS_LABEL_TEXTS / LAUNCHER_UPDATE_LABELS）已删，改成函数 ——

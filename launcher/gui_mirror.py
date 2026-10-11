@@ -60,9 +60,13 @@ class MirrorTestMixin:
         #（否则新线程一进循环就判「已取消」，秒退）。
         self._mirror_test_cancel = threading.Event()
         # 进度显示的初态：采样 0 / (候选数 × 轮数)、还没有「当前采样」。
-        # 轮数固定取 mirrortest.ROUNDS（测试替身不走这个数，所以这只是显示用的刻度）。
+        # ★ 轮数取设置项（mirror_test_rounds，设置页可调，1~3）—— 采样
+        #   总数 = 候选数 × 轮数，直接决定等待时长；后台线程拿的是同一份
+        #   值（随线程参数传下去，见 _mirror_test_task）。
         self._mirror_test_total = total
-        self._mirror_test_rounds = max(1, mirrortest.ROUNDS)
+        self._mirror_test_rounds = max(
+            1, int(self.config.get("mirror_test_rounds"))
+        )
         self._mirror_test_samples = 0
         self._mirror_test_cur_prefix = None
         self._mirror_test_canceling = False
@@ -71,7 +75,7 @@ class MirrorTestMixin:
         self._mirror_test_set_progress_visible(True)
         self._mirror_test_thread = threading.Thread(
             target=self._mirror_test_task,
-            args=(targets, total),
+            args=(targets, total, self._mirror_test_rounds),
             daemon=True,
         )
         self._mirror_test_start_ticker()
@@ -102,8 +106,14 @@ class MirrorTestMixin:
 
     # ---------- 后台线程 ----------
 
-    def _mirror_test_task(self, targets: list[str], total: int) -> None:
+    def _mirror_test_task(
+        self, targets: list[str], total: int, rounds: int
+    ) -> None:
         """后台线程：交错多轮测完所有候选（这里唯一碰网络的地方）。
+
+        ``rounds`` 由调用方（GUI 线程）从设置项 mirror_test_rounds 读出后
+        传进来 —— 后台线程不自己去读配置，避免「读的时候设置页正在被
+        重建」这类跨线程意外。
 
         ⚠️ 不接 ``on_result``：交错采样下它要**所有轮次跑完**才逐条到达，
         拿它画进度会「全程 0、末尾连跳 N 格」。进度只看 ``on_progress``
@@ -125,6 +135,7 @@ class MirrorTestMixin:
         try:
             results = mirrortest.test_mirrors(
                 targets,
+                rounds=rounds,
                 on_progress=on_progress,
                 stop_event=stop,
             )
@@ -317,7 +328,7 @@ class MirrorTestMixin:
         intro = t(
             "mirror_test.intro",
             seconds=f"{mirrortest.SAMPLE_SECONDS:g}",
-            rounds=mirrortest.ROUNDS,
+            rounds=max(1, self._mirror_test_rounds),
         )
         if canceled:
             intro += t("mirror_test.partial", n=max(0, total - len(ordered)))

@@ -2,22 +2,24 @@
 """更新检查与运行时下载。"""
 import json
 import logging
-import os
-import tempfile
 import threading
 import urllib.error
 import urllib.request
 import zipfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 from .config import ConfigManager, normalize_mirror
 from .ghauth import apply_auth
 from .i18n import t
 from .storage import VersionManager
-from .utils import UNVERIFIED_SSL_CTX, download_file, parse_bool
+from .utils import (
+    UNVERIFIED_SSL_CTX,
+    download_file,
+    download_tmp_path,
+    parse_bool,
+)
 from .version import USER_AGENT
 
 logger = logging.getLogger(__name__)
@@ -238,15 +240,18 @@ class UpdateManager:
         if mirror and info.get("use_mirror", True):
             urls.append(mirror + info["download_url"])
         urls.append(info["download_url"])
-        tmp_path = None
+        # ★ 断点文件用**确定性路径**（以原始下载地址为身份）：镜像失败换
+        #   直连、甚至关掉启动器下次再点，都能接着已下载的部分往下下。
+        #   （原先是每次 mkstemp 一个随机名，等于每轮都从零开始。）
+        tmp_path = download_tmp_path(
+            info["download_url"], suffix=".jar.downloading"
+        )
+        expect_size = int(info.get("size") or 0)
         final_path = None
         try:
             for url in urls:
                 if self.stop_event.is_set():
                     return False
-                fd, tmp_path = tempfile.mkstemp(suffix=".jar.downloading")
-                tmp_path = Path(tmp_path)
-                os.close(fd)
 
                 def progress(pct: float) -> None:
                     if status_cb:
@@ -263,18 +268,21 @@ class UpdateManager:
                     self.stop_event,
                     on_progress=progress,
                     expected_sha256=info.get("sha256"),
+                    expected_size=expect_size,
+                    resume=True,
                 )
                 if not ok:
-                    tmp_path.unlink(missing_ok=True)
-                    logger.warning(f"从 {url} 下载失败，尝试下一个源")
+                    # ★ 不删已下载的部分：下一个源（或用户下次重试）接着下
+                    logger.warning(f"从 {url} 下载失败，尝试下一个源（保留断点）")
                     continue
                 actual_size = tmp_path.stat().st_size
-                if info.get("size", 0) > 0 and actual_size != info["size"]:
+                if expect_size > 0 and actual_size != expect_size:
                     # ★ 先取大小再删文件。以前这里是**删完才 stat()**，
                     #   于是这条分支必然抛 FileNotFoundError，被下面的
                     #   except 吞成「下载过程中异常」—— 结果是
                     #   「镜像下到一半的残缺文件」不会去重试下一个源，
                     #   用户看到的是「下载失败」，其实是这里自己绊倒的。
+                    #   大小对不上 = 这份数据没救（续不动），删掉重来。
                     tmp_path.unlink(missing_ok=True)
                     logger.warning(
                         f"文件大小不匹配，预期 {info['size']}，实际 {actual_size}"
@@ -284,7 +292,7 @@ class UpdateManager:
                     tmp_path.unlink(missing_ok=True)
                     logger.warning("下载的文件不是有效的 ZIP/JAR")
                     continue
-                # mkstemp 给的名字是 ``xxx.jar.downloading``：用
+                # 断点文件的名字是 ``xxx.jar.downloading``：用
                 # with_suffix(".jar") 会得到 ``xxx.jar.jar``（难看但能用），
                 # 这里直接把那个后缀切掉。
                 final_path = tmp_path.with_name(
@@ -300,7 +308,7 @@ class UpdateManager:
             logger.error(f"下载过程中异常: {e}")
             return False
         finally:
-            if tmp_path and tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
+            # ★ 失败时**不再**删断点文件（下一源 / 下次重试要用；真正没救的
+            #   情况 —— 大小不符、非 ZIP、校验不过 —— 在上面各自的分支里删）。
             if final_path and final_path.exists():
                 final_path.unlink(missing_ok=True)

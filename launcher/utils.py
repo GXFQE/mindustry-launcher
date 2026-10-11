@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """通用工具：SSL 兼容、日志、原子写入、目录压缩、文件下载。"""
 import hashlib
+import http.client
 import json
 import logging
 import os
+import re
 import ssl
 import sys
 import tempfile
@@ -32,6 +34,8 @@ __all__ = [
     "atomic_write_json",
     "atomic_write_text",
     "download_file",
+    "download_tmp_path",
+    "file_sha256",
     "logger",
     "normalize_language",
     "parse_bool",
@@ -326,53 +330,219 @@ def zip_directory(source: Path, dest: Path) -> int:
     logger.debug(f"压缩目录 {source} -> {dest}，大小 {size} 字节")
     return size
 
+# 下载读块大小。以前是 8 KB（每个块都要过一遍 Python 层的循环，太小），
+# 64 KB 与 mirrortest 的口径一致 —— syscall 次数和单次阻塞粒度的折中。
+_DOWNLOAD_CHUNK = 64 * 1024
+
+
+def file_sha256(path: Path) -> str:
+    """整文件 sha256（1 MiB 读块）。
+
+    断点续传时没法「边下边算」—— 文件前半段是上一条连接写的，哈希状态
+    已经丢了 —— 只能下完从头再算一遍（87 MB 在 SSD 上约 0.3 秒）。
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_tmp_path(identity: str, suffix: str = ".downloading") -> Path:
+    """断点文件的**确定性**路径：同一 ``identity`` 永远得到同一个文件。
+
+    ★ 断点续传的前提是「下一次还找得到上一次的半成品」—— 随机名字
+    （mkstemp）做不到。``identity`` 传**原始下载地址**（不带镜像前缀）：
+    GitHub release 资产不可变，同一地址就是同一份内容，天然做着「断点
+    属于哪个文件」的隔离；拿错文件的残局由 sha256 校验兜底。
+    """
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"mdt-dl-{digest}{suffix}"
+
+
+def _parse_content_range(value: str) -> tuple[int, int]:
+    """解析 ``Content-Range: bytes 100-999/1000`` → ``(起点, 总大小)``。
+
+    拿不到（格式不是这个 / 是 ``*``）就返回 ``(-1, 0)``：起点 -1 = 不可信，
+    总大小 0 = 不知道。
+    """
+    m = re.match(r"\s*bytes\s+(\d+)-(\d+)/(\d+|\*)", value or "")
+    if not m:
+        return -1, 0
+    return int(m.group(1)), (int(m.group(3)) if m.group(3) != "*" else 0)
+
+
+def _try_unlink(path: Path) -> None:
+    """删文件；删不掉就记一条日志（写入方会用覆盖写兜底，绝不让它抛）。"""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning(f"删除文件失败 {path}: {e}")
+
+
 def download_file(
     url: str,
     dest: Path,
     stop_event: threading.Event | None = None,
     on_progress: Callable[[float], None] | None = None,
     expected_sha256: str | None = None,
+    expected_size: int = 0,
+    resume: bool = False,
 ) -> bool:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    # 装了 gh 且已登录的话，给 GitHub 官方域名的下载带上认证（额度更高、
-    # 私有资产也能下）；镜像前缀 / 自定义源这类第三方地址**不带**（白名单
-    # 在 ghauth 里）。增强项：失败绝不影响下载本身。
-    ghauth.apply_auth(req)
-    try:
-        with urllib.request.urlopen(
-            req, timeout=30, context=UNVERIFIED_SSL_CTX
-        ) as resp:
-            if resp.status != 200:
-                logger.warning(f"下载失败 HTTP {resp.status}: {url}")
+    """下载 ``url`` 到 ``dest``；返回是否成功。
+
+    ``resume=True`` 时支持**断点续传**：``dest`` 已有部分内容就先带
+    Range 头问一次服务器 ——
+
+      * 206（支持续传）：从断点接着写，进度从断点的百分比起步；
+      * 200（不支持 / 或本来就没有断点）：从头下载、覆盖；
+      * 416（本地已经 ≥ 远端）：内容对就直接算成功（断点即终点），
+        不对就删了重下。
+
+    ★ 失败时默认**保留**已下载的部分（下一个源 / 用户下次重试能接着
+    下）—— 只有「已经下满但内容校验不过」这种没救的情况才清掉。
+    ``expected_size`` 是「任务期望的总大小」（0 = 不检查），用于核对
+    服务器给的确实是我们以为的那个文件。
+    """
+    skip = 0
+    if resume:
+        try:
+            skip = dest.stat().st_size
+        except OSError:
+            skip = 0
+
+    resp = None
+    total_remote = 0
+    resumed = False
+    # 最多两轮：第一轮带断点（如有），被服务器拒绝就地退成「从头下」
+    #（重发一次不带 Range 的请求）。
+    for _attempt in range(2):
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if skip > 0:
+            headers["Range"] = f"bytes={skip}-"
+        req = urllib.request.Request(url, headers=headers)
+        # 装了 gh 且已登录的话，给 GitHub 官方域名的下载带上认证（额度更高、
+        # 私有资产也能下）；镜像前缀 / 自定义源这类第三方地址**不带**（白名单
+        # 在 ghauth 里）。增强项：失败绝不影响下载本身。
+        ghauth.apply_auth(req)
+        try:
+            resp = urllib.request.urlopen(
+                req, timeout=30, context=UNVERIFIED_SSL_CTX
+            )
+        except urllib.error.HTTPError as e:
+            if e.code == 416 and skip > 0:
+                # 本地比远端还大（或正好相等）—— 断点没得续了。
+                # 若大小正好等于目标且内容对得上：断点即终点，直接成功。
+                if (
+                    expected_size and expected_sha256
+                    and skip == expected_size
+                    and file_sha256(dest).lower() == expected_sha256.lower()
+                ):
+                    logger.info(f"本地文件已完整（断点即终点）: {dest}")
+                    return True
+                logger.warning(f"断点超出远端大小（HTTP 416），删除后重下: {dest}")
+                _try_unlink(dest)
+                skip = 0
+                continue
+            logger.error(f"下载失败 HTTP {e.code}: {url}")
+            return False
+        except (urllib.error.URLError, OSError,
+                http.client.IncompleteRead, http.client.RemoteDisconnected) as e:
+            logger.error(f"下载异常 {url}: {e}")
+            return False
+
+        if resp.status == 206 and skip > 0:
+            start, total_remote = _parse_content_range(
+                resp.headers.get("Content-Range", "")
+            )
+            if start != skip:
+                logger.warning(
+                    f"服务器给的断点位置对不上（{start} ≠ {skip}），"
+                    f"弃用本地断点重下: {dest}"
+                )
+                resp.close()
+                _try_unlink(dest)
+                skip = 0
+                continue
+            if expected_size and total_remote and total_remote != expected_size:
+                # 服务器上的文件跟任务预期不是一个东西 —— 换源，别浪费带宽
+                logger.warning(
+                    f"服务器文件大小（{total_remote}）与预期（{expected_size}）"
+                    f"不符: {url}"
+                )
+                resp.close()
                 return False
-            total = int(resp.headers.get("Content-Length", 0))
-            downloaded = 0
-            last_update = time.time()
-            sha256 = hashlib.sha256()
-            with open(dest, "wb") as f:
+            resumed = True
+            break
+        if resp.status == 200:
+            if skip > 0:
+                logger.info(f"服务器不支持断点续传，从头下载: {url}")
+                skip = 0
+            break
+        logger.warning(f"下载失败 HTTP {resp.status}: {url}")
+        resp.close()
+        return False
+    else:
+        # 两轮都没拿到可用的响应（416 循环）—— 保险丝
+        logger.error(f"下载失败（断点重试次数用尽）: {url}")
+        return False
+
+    with resp:
+        content_length = int(resp.headers.get("Content-Length", 0) or 0)
+        # 206 时 Content-Length 只是「剩余部分」的长度，总大小以
+        # Content-Range 的 Z 为准；200 时 skip 已归零，直接相加。
+        total = total_remote or (skip + content_length)
+        if resumed:
+            logger.info(
+                f"从断点续传: 已有 {skip} / {total} 字节"
+                + (f"（{skip / total * 100:.1f}%）" if total > 0 else "")
+            )
+        downloaded = skip
+        last_update = time.time()
+        sha256 = hashlib.sha256()
+        try:
+            with open(dest, "ab" if resumed else "wb") as f:
                 while True:
                     if stop_event is not None and stop_event.is_set():
                         logger.info("下载被用户取消")
                         return False
-                    chunk = resp.read(8192)
+                    chunk = resp.read(_DOWNLOAD_CHUNK)
                     if not chunk:
                         break
                     f.write(chunk)
-                    sha256.update(chunk)
                     downloaded += len(chunk)
+                    if not resumed:
+                        # 续传过的文件前半段没经过这里，哈希对不上；
+                        # 那时改用 file_sha256() 整文件重算。
+                        sha256.update(chunk)
                     now = time.time()
                     if on_progress and total > 0 and now - last_update >= 1.0:
                         on_progress(downloaded / total * 100)
                         last_update = now
-            if expected_sha256:
-                actual = sha256.hexdigest().lower()
-                if actual != expected_sha256.lower():
-                    logger.error(
-                        f"SHA256 校验失败: 期望 {expected_sha256}, 实际 {actual}"
-                    )
-                    return False
-            logger.info(f"下载成功: {url} -> {dest}")
-            return True
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
-        logger.error(f"下载异常 {url}: {e}")
-        return False
+        except (urllib.error.URLError, OSError,
+                http.client.IncompleteRead, http.client.RemoteDisconnected) as e:
+            # 中途断线：故意**不删**文件 —— 已下部分是下一次的断点
+            logger.error(f"下载中断 {url}: {e}")
+            return False
+
+    if expected_sha256:
+        actual = file_sha256(dest) if resumed else sha256.hexdigest()
+        if actual.lower() != expected_sha256.lower():
+            if total > 0 and downloaded >= total:
+                # 下满了但内容不对：这份数据没救了，删掉（别让它冒充断点）
+                logger.error(
+                    f"SHA256 校验失败（文件已下满，已删除）: "
+                    f"期望 {expected_sha256}, 实际 {actual}"
+                )
+                _try_unlink(dest)
+            else:
+                # 没下满：留着，下一个源 / 下次重试还能续着把它下完
+                logger.error(
+                    f"SHA256 校验失败（文件不完整，保留断点可续传）: "
+                    f"期望 {expected_sha256}, 实际 {actual}"
+                )
+            return False
+    logger.info(f"下载成功: {url} -> {dest}")
+    return True

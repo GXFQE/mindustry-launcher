@@ -363,7 +363,11 @@ def download_update(
     stop_event: threading.Event | None = None,
     on_progress: Callable[[float], None] | None = None,
 ) -> bool:
-    """下更新包。镜像前缀试不过就退回直连（跟游戏版本下载一个套路）。"""
+    """下更新包。镜像前缀试不过就退回直连（跟游戏版本下载一个套路）。
+
+    支持断点续传：失败/取消时**不删** ``dest`` 的已下部分，换下一个
+    地址（或用户下次重试）接着下。
+    """
     urls = []
     if mirror and info.get("url"):
         urls.append(mirror + info["url"])
@@ -371,6 +375,16 @@ def download_update(
         urls.append(info["url"])
     if not urls:
         return False
+    expect_size = int(info.get("size") or 0)
+    # 断点守卫：现存的半成品比目标**还大** ⇒ 它属于别的更新包（比如上一版
+    # 下了一半），留着只会坏事。比目标小的错配拦不住 —— 由 sha256 兜底
+    #（校验不过会被删掉重来，代价是白下一次）。
+    if dest.exists() and expect_size > 0 and dest.stat().st_size > expect_size:
+        logger.info(
+            f"丢弃不匹配的更新包断点（已有 {dest.stat().st_size}，"
+            f"目标 {expect_size}）"
+        )
+        dest.unlink(missing_ok=True)
     for url in urls:
         if stop_event is not None and stop_event.is_set():
             return False
@@ -378,12 +392,15 @@ def download_update(
             url, dest, stop_event,
             on_progress=on_progress,
             expected_sha256=info.get("sha256") or None,
+            expected_size=expect_size,
+            resume=True,
         )
         if ok:
-            expect = int(info.get("size") or 0)
             actual = dest.stat().st_size
-            if expect > 0 and actual != expect:
-                logger.warning(f"更新包大小不符（预期 {expect}，实际 {actual}）")
+            if expect_size > 0 and actual != expect_size:
+                logger.warning(
+                    f"更新包大小不符（预期 {expect_size}，实际 {actual}）"
+                )
                 dest.unlink(missing_ok=True)
                 continue
             if not zipfile.is_zipfile(dest):
@@ -391,7 +408,9 @@ def download_update(
                 dest.unlink(missing_ok=True)
                 continue
             return True
-        logger.warning(f"从 {url} 下更新包失败，换下一个地址")
+        # ★ 失败时**不删** dest —— 断点留着，下一个地址（或用户下次
+        #   重试）能接着已下载的部分下。
+        logger.warning(f"从 {url} 下更新包失败，换下一个地址（保留断点）")
     return False
 
 
@@ -855,7 +874,7 @@ def check_and_stage(
         ),
     )
     if not ok:
-        zip_path.unlink(missing_ok=True)
+        # ★ 不删 zip_path：已下载的部分留在原地，下次重试/换镜像能接着下
         return {"status": "failed", "version": version,
                 "message": t("selfupdate.download_failed")}
 

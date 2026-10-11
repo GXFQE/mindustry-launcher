@@ -45,12 +45,15 @@
 项数见末尾统计（改完 launcher/ 就该跑一遍）。
 """
 import ast
+import hashlib
 import http.server
+import io
 import json
 import logging
 import os
 import queue
 import re
+import shutil
 import socketserver
 import sys
 import tempfile
@@ -549,6 +552,7 @@ def main():
     test_mirror_and_log_keep()
     test_mirror_speed_test()
     test_gh_auth()
+    test_download_resume()
     test_lock_scope()
     test_wheel_routing()
     test_settings_flow_and_autoclose()
@@ -1336,21 +1340,42 @@ def test_mirror_and_log_keep():
 
 # --------------------- 12b. GitHub 镜像测速（本地服务，离线，确定性）
 # 靶场路由：
-#   /blob  正常文件（600 KB，读得快）
-#   /tiny  小得离谱（100 KB）—— 模拟镜像返回的错误页
-#   /slow  磨洋工（每 50 ms 吐 8 KB）—— 触发预算超时
-#   其它   404
+#   /blob    正常文件（600 KB，读得快）
+#   /tiny    小得离谱（100 KB）—— 模拟镜像返回的错误页
+#   /slow    磨洋工（每 50 ms 吐 8 KB）—— 触发预算超时
+#   /ranged  200 KB 确定数据，**支持 Range**（206 + Content-Range）—— 12d
+#   /norange 无视 Range 头，永远 200 全量 —— 12d（有的镜像真这样）
+#   /cut     第一条连接发一半就断 —— 12d（模拟下载中断）
+#   /jar     一段有效 zip 数据，支持 Range —— 12d 的调用方端到端
+#   其它     404
 _BLOB = b"x" * 600_000
 _TINY = b"z" * 100_000
+# 断点续传测试（12d）的数据源：内容确定（每个字节可验）、够大（能分块）
+_DL_DATA = bytes(i % 251 for i in range(200_000))
+# 一段**有效 zip**（ZIP_STORED，尺寸确定）：调用方链路的末尾有 is_zipfile
+# 校验，靶场数据必须真的能过。
+_zbuf = io.BytesIO()
+with zipfile.ZipFile(_zbuf, "w", zipfile.ZIP_STORED) as _zf:
+    _zf.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\n")
+    _zf.writestr("game/Content.class", b"\xca\xfe\xba\xbe" + b"x" * 150_000)
+_JAR_DATA = _zbuf.getvalue()
 
 
 class _ProbeHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
+    # 12d（断点续传）用：每条请求的 (路径, Range 头, 状态码, 实际发出的字节数)；
+    # cut_armed = /cut 的下一条连接「发一半就断」，用一次就复位（重试要能成功）。
+    served: list = []
+    cut_armed = False
+
     def log_message(self, *args):                       # 别往 stderr 刷
         pass
 
     def do_GET(self):
+        if self.path in ("/ranged", "/norange", "/cut", "/jar"):
+            self._serve_rangeable()
+            return
         if self.path == "/blob":
             payload = _BLOB
         elif self.path == "/tiny":
@@ -1374,6 +1399,48 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _serve_rangeable(self):
+        """12d 的靶场：支持 Range；/cut 可模拟「发一半就断」。"""
+        path = self.path
+        payload = _JAR_DATA if path == "/jar" else _DL_DATA
+        if path == "/cut" and _ProbeHandler.cut_armed:
+            _ProbeHandler.cut_armed = False     # 只断一次；重试要能成功
+            cut = len(payload) // 2
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload[:cut])
+            self.wfile.flush()
+            self.close_connection = True        # 提前关连接 → 客户端 IncompleteRead
+            _ProbeHandler.served.append((path, "", 200, cut))
+            return
+        rng = self.headers.get("Range", "")
+        if rng and path != "/norange":
+            m = re.match(r"bytes=(\d+)-", rng)
+            start = int(m.group(1)) if m else 0
+            if start >= len(payload):
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(payload)}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                _ProbeHandler.served.append((path, rng, 416, 0))
+                return
+            body = payload[start:]
+            self.send_response(206)
+            self.send_header(
+                "Content-Range",
+                f"bytes {start}-{len(payload) - 1}/{len(payload)}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            _ProbeHandler.served.append((path, rng, 206, len(body)))
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+        _ProbeHandler.served.append((path, rng, 200, len(payload)))
 
 
 def _start_probe_server():
@@ -1722,6 +1789,197 @@ def test_gh_auth():
 
     # 恢复现场：后面的测试不该继承这一层的模块级状态。
     ghauth._enabled, ghauth._probed, ghauth._token, ghauth._status = saved
+
+
+# --------------------- 12d. 下载断点续传（本地 HTTP 服务，离线，确定性）
+def test_download_resume():
+    """断点续传的每条行为分支都取决于「服务器怎么答」—— 必须可控。
+
+    ★ 这里钉住的事实：
+      * 服务器不支持 Range（200）→ 从头下，**不许**把全量接在断点后面；
+      * 本地断点超过远端（416）→ 内容对＝断点即终点；不对/没法验 → 重下；
+      * 「下满但 sha 不对」= 没救，删；「没下满」= 留着，下次接着下；
+      * 失败/取消**不删**断点 —— 跨源（镜像→直连）、跨次重试全靠它；
+      * 断点路径是**确定性**的（download_tmp_path），否则跨次续传无从谈起。
+    """
+    print("\n[12d] 下载断点续传（本地 HTTP 服务，离线）")
+    from launcher.utils import download_file, download_tmp_path
+    from launcher.updates import UpdateManager
+    from launcher.selfupdate import download_update
+
+    data = _DL_DATA
+    sha = hashlib.sha256(data).hexdigest()
+    jar = _JAR_DATA
+    jar_sha = hashlib.sha256(jar).hexdigest()
+    sb = Path(tempfile.mkdtemp(prefix="mdt-dl-"))
+    kept: list = []                    # 故意留在 %TEMP% 的断点（收尾要清）
+    srv, base = _start_probe_server()
+    _ProbeHandler.served.clear()
+    _ProbeHandler.cut_armed = False
+    try:
+        # ---- 基线：不带 resume 的调用保持老行为（整文件覆盖 + sha 校验）----
+        old = sb / "old.bin"
+        old.write_bytes(b"stale-old-bytes")
+        check("resume=False 保持老行为：覆盖下载、结果正确",
+              download_file(base + "ranged", old, expected_sha256=sha)
+              and old.read_bytes() == data)
+
+        # ---- 断点续传：只请求剩余部分 ----
+        part = sb / "part.bin"
+        part.write_bytes(data[:100_000])
+        _ProbeHandler.served.clear()
+        ok = download_file(base + "ranged", part, resume=True,
+                           expected_sha256=sha)
+        hit = [s for s in _ProbeHandler.served if s[0] == "/ranged"]
+        check("断点续传成功且内容正确", ok and part.read_bytes() == data)
+        check("★ 请求带 Range 头、起点＝本地已有大小",
+              any(a == "bytes=100000-" for _, a, _, _ in hit), str(hit))
+        check("★ 服务器只发了剩余部分（没重下已有的 100 KB）",
+              bool(hit) and hit[-1][3] == len(data) - 100_000, str(hit[-1:]))
+
+        # ---- 服务器无视 Range → 从头下（绝不许拼接）----
+        part2 = sb / "part2.bin"
+        part2.write_bytes(data[:100_000])
+        ok = download_file(base + "norange", part2, resume=True,
+                           expected_sha256=sha)
+        check("★ 服务器不支持 Range → 从头下、结果仍正确（不许拼接错数据）",
+              ok and part2.read_bytes() == data
+              and part2.stat().st_size == len(data))
+
+        # ---- 416：本地已完整 → 断点即终点，零下载 ----
+        full = sb / "full.bin"
+        full.write_bytes(data)
+        _ProbeHandler.served.clear()
+        ok = download_file(base + "ranged", full, resume=True,
+                           expected_sha256=sha, expected_size=len(data))
+        check("★ 本地已完整（416）→ 校验通过直接成功、一个字节都不下",
+              ok and all(x[3] == 0 for x in _ProbeHandler.served),
+              str(_ProbeHandler.served))
+
+        # ---- 416 但内容错 → 删掉重下 ----
+        broke = bytearray(data)
+        broke[7] ^= 0xFF
+        full.write_bytes(bytes(broke))
+        ok = download_file(base + "ranged", full, resume=True,
+                           expected_sha256=sha, expected_size=len(data))
+        check("416 但内容不对 → 删掉重下、最终正确",
+              ok and full.read_bytes() == data)
+
+        # ---- 416 且没给 sha（没法校验）→ 不侥幸放行 ----
+        full.write_bytes(data)
+        ok = download_file(base + "ranged", full, resume=True)
+        check("416 但没 sha 可验 → 不冒险放行，删了重下",
+              ok and full.read_bytes() == data)
+
+        # ---- 下满但 sha 不符：删（没救）----
+        junk = sb / "junk.bin"
+        ok = download_file(base + "ranged", junk, expected_sha256="0" * 64)
+        check("下满但 sha 不符 → 失败且文件被删（不冒充断点）",
+              (not ok) and (not junk.exists()))
+
+        # ---- 中途断流：保留断点；重试能续传完成 ----
+        cut = sb / "cut.bin"
+        _ProbeHandler.cut_armed = True
+        ok = download_file(base + "cut", cut, resume=True,
+                           expected_sha256=sha)
+        check("★ 下载中途断流 → 失败但断点保留",
+              (not ok) and cut.exists()
+              and 0 < cut.stat().st_size < len(data),
+              f"size={cut.stat().st_size if cut.exists() else 'gone'}")
+        ok = download_file(base + "cut", cut, resume=True,
+                           expected_sha256=sha)
+        check("断流后重试 → 从断点续传完成",
+              ok and cut.read_bytes() == data)
+
+        # ---- 调用方端到端（updates）：镜像拒连 → 直连从断点续传 ----
+        class _Cfg:
+            def __init__(self, mirror):
+                self._mirror = mirror
+
+            def get(self, key, default=None):
+                return self._mirror if key == "github_mirror" else default
+
+        class _VM:
+            def __init__(self):
+                self.jars: list = []
+
+            def add_version_from_jar(self, path, version, vtype):
+                self.jars.append(Path(path).read_bytes())
+
+        info = {"type": "UnitTest", "version": "9.9",
+                "download_url": base + "jar", "size": len(jar),
+                "sha256": jar_sha, "use_mirror": True}
+        bp = download_tmp_path(info["download_url"],
+                               suffix=".jar.downloading")
+        bp.write_bytes(jar[: len(jar) // 3])
+        vm = _VM()
+        um = UpdateManager(vm, _Cfg("http://127.0.0.1:1/"), None,
+                           threading.Event())
+        ok = um._download_version(dict(info))
+        check("★ updates 端到端：镜像拒连 → 直连从断点续传、导入成功",
+              ok and vm.jars == [jar], f"ok={ok} jars={len(vm.jars)}")
+        check("成功后断点文件被消费、不残留", not bp.exists())
+
+        # ---- 全部源都失败：断点留下，下次（或换源）接着下 ----
+        dead = dict(info)
+        dead["download_url"] = "http://127.0.0.1:1/jar"
+        bp2 = download_tmp_path(dead["download_url"],
+                                suffix=".jar.downloading")
+        kept.append(bp2)
+        bp2.write_bytes(jar[: len(jar) // 3])
+        um2 = UpdateManager(_VM(), _Cfg("http://127.0.0.1:1/"), None,
+                            threading.Event())
+        ok = um2._download_version(dead)
+        check("★ 全部源都失败 → 断点保留（下次重试接着下）",
+              (not ok) and bp2.exists()
+              and bp2.stat().st_size == len(jar) // 3,
+              f"ok={ok} exists={bp2.exists()}")
+
+        # ---- selfupdate 端到端：续传 + 「超大陈旧断点」守卫 ----
+        zinfo = {"url": base + "jar", "size": len(jar), "sha256": jar_sha}
+        zdest = sb / "update.zip"
+        zdest.write_bytes(jar[: len(jar) // 4])
+        ok = download_update(zinfo, zdest)
+        check("selfupdate：更新包从断点续传成功",
+              ok and zdest.read_bytes() == jar, f"ok={ok}")
+        zdest.write_bytes(jar + b"stale-extra")     # 比目标还大＝上一版残留
+        ok = download_update(zinfo, zdest)
+        check("selfupdate：比目标大的陈旧断点被丢弃、重下正确",
+              ok and zdest.read_bytes() == jar, f"ok={ok}")
+
+        # ---- 接线（防无声退化）：两处调用方必须真的用上新能力 ----
+        up_tree = ast.parse((ROOT / "launcher" / "updates.py")
+                            .read_text(encoding="utf-8"))
+        su_tree = ast.parse((ROOT / "launcher" / "selfupdate.py")
+                            .read_text(encoding="utf-8"))
+
+        def _resume_calls(tree):
+            found = []
+            for c in ast.walk(tree):
+                if not (isinstance(c, ast.Call)
+                        and _callee(c) == "download_file"):
+                    continue
+                if any(k.arg == "resume"
+                       and getattr(k.value, "value", None) is True
+                       for k in c.keywords):
+                    found.append(c)
+            return found
+
+        check("接线：updates._download_version 以 resume=True 调 download_file",
+              len(_resume_calls(up_tree)) == 1,
+              f"{len(_resume_calls(up_tree))} 处")
+        check("接线：selfupdate.download_update 以 resume=True 调 download_file",
+              len(_resume_calls(su_tree)) == 1,
+              f"{len(_resume_calls(su_tree))} 处")
+        check("接线：updates 的断点走确定性路径（download_tmp_path）",
+              any(_callee(c) == "download_tmp_path"
+                  for c in ast.walk(up_tree)))
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        for p in kept:
+            p.unlink(missing_ok=True)
+        shutil.rmtree(sb, ignore_errors=True)
 
 
 # ------------------------------------- 13. 锁的作用域（持锁弹窗 = 自锁）

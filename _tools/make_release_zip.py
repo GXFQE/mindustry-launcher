@@ -347,6 +347,9 @@ the "ENGLISH" line further down.
    不确定哪个镜像快，点旁边的 "测速"：它会真下一小段、把每个候选
    （含直连）按速度排出来（测的时候有进度条），点 "用最快的" 直接填回去。
 
+   下载中途断了（网络抖、关了启动器、换镜像）都不用从头再来：
+   下次接着已经下好的那部分继续，不会白下。
+
 4. 在列表里选中一个版本，点 "启动游戏"。
 
 
@@ -532,6 +535,9 @@ HOW TO USE
    downloads a small sample through every candidate (direct included), sorts
    them by speed (a progress bar shows which one is being tested), and
    "用最快的" (Use fastest) fills the winner back in.
+   Downloads resume: if one dies halfway (flaky network, you closed the
+   launcher, you switched mirrors), the next attempt continues from where it
+   stopped instead of downloading everything again.
 
 4. Select a version in the list, then click "启动游戏" (Launch game).
 

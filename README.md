@@ -35,7 +35,8 @@ Chinese in the first half, English in the second.
 - **Automatic backups** — runs after you quit the game, under the conditions you set
   (by default: at least 20 minutes played, keep the newest 20).
 - **Update checking** — downloads game versions for you. If GitHub is slow where you
-  are, set a mirror in Settings.
+  are, set a mirror in Settings. A download that dies halfway resumes from where it
+  stopped instead of starting over.
 - **Launch pre-warming** — the selected version's files are assembled in the background
   while the window is open, so launching is quicker.
 - **Log viewer** — captures the game's output so you can read it after it exits.

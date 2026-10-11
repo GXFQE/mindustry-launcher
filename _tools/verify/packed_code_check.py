@@ -8,9 +8,10 @@ exe 能正常启动、看起来一切正常，只是跑的是旧逻辑 —— �
 用法：
     python _tools/verify/packed_code_check.py [exe路径]
 
-不带参数时查项目根那个已部署的 `Mindustry启动器.exe`；
-打完之后想验产物，就把新 exe 的路径当参数传进来。
-（注意：新 exe 和已部署的那份可能是同一个文件——打完记得先覆盖再验。）
+不带参数时按「你真正在跑的那份」优先找：项目根 → **运行时目录** → `dist/`
+（顺序与理由见 `find_exe`）。
+想专门验刚打出来的产物，就把 `dist/Mindustry启动器/Mindustry启动器.exe`
+当参数传进来（注意：新 exe 和已部署的那份可能是同一个文件——打完记得先覆盖再验）。
 
 做法：CArchiveReader 取出 PYZ 归档 → 逐模块解出 code object →
 递归遍历所有嵌套函数的 co_names，断言所需符号都在；
@@ -40,7 +41,7 @@ def _find_project_root(start: Path) -> Path:
 
 ROOT = _find_project_root(Path(__file__).resolve().parent)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # _tools/ 共用路径模块
-from _paths import DATA, JRE, LOG, MANIFESTS, VERSIONS  # noqa: E402
+from _paths import DATA, JRE, LOG, MANIFESTS, VERSIONS, find_runtime_root  # noqa: E402
 sys.path.insert(0, str(ROOT))
 
 # 模块 -> 必须在里面出现的符号
@@ -145,6 +146,11 @@ REQUIRED = {
         # 2026-10-07：文件下载也会带上 gh 认证（仅 GitHub 官方域名；镜像站
         # 这类第三方地址不带 —— 白名单在 ghauth 里）
         "ghauth",
+        # 2026-10-11：下载支持断点续传（Range 续写；失败保留断点、跨源/跨次
+        # 续传；「下满但校验不过」才删）。辅助函数与读块常量都在包里才算
+        # 真带上这个能力。
+        "download_file", "download_tmp_path", "file_sha256",
+        "_parse_content_range", "_try_unlink", "_DOWNLOAD_CHUNK",
     ],
     "launcher.config": [
         # 版本号会拼进清单文件名，必须和分类名一样过校验
@@ -229,6 +235,9 @@ REQUIRED = {
         "_fetch_release", "sources", "parse_bool",
         # 2026-10-07：查版本也会带 gh 认证（GitHub 官方来源；自定义来源不带）
         "apply_auth",
+        # 2026-10-11：断点文件用确定性路径（download_tmp_path）；换源/重试
+        # 从已下部分接着下，而不是从零开始
+        "download_tmp_path", "download_file",
     ],
     # 2026-09-22 新增的三个模块（面向发布的可扩展性接口）。跟 09-18 那两个
     # 一样：不在包里 = exe 还是旧逻辑（来源写死、没有迁移链、没有扩展点），
@@ -269,6 +278,11 @@ REQUIRED = {
         # 2026-10-07：查「自己的新版」也带 gh 认证（接口被环境变量换成
         # 自建代理时白名单会挡住令牌 —— 代理拿到它等于泄露）
         "apply_auth",
+        # 2026-10-11：更新包也走断点续传（失败保留已下部分，换源/重试接着下）。
+        # 这里只钉 launcher.utils.download_file 这个名字 —— 断点续传的参数
+        # （resume= / expected_size=）是**关键字实参**，不出现在 co_names 里，
+        # 由 code_regression 的 AST 接线断言负责。
+        "download_file",
     ],
     # 2026-10-07 新增：GitHub 镜像测速（mirrortest 纯逻辑 + gui_mirror 界面）。
     # 跟前面那些一样：不在包里 = exe 还是个「设置页没有测速按钮」的旧版本，
@@ -337,15 +351,26 @@ def collect_names(code, seen=None):
 def find_exe(argv):
     """不带参数时按常见位置找，也可以把路径当参数传进来。
 
-    先找项目根（已部署的形态），再找 dist/（刚构建、还没部署的形态）——
-    两种状态下都能直接跑，不用手敲路径。
+    顺序＝「你真正在跑的那份」优先：
+      ① 项目根（老形态，exe 直接放仓库根）
+      ② 运行时目录（**现在部署到这儿** —— 日常双击的就是它）
+      ③ `dist/`（刚构建、还没部署的形态）
+    ①②③ 都能直接跑，不用手敲路径。
+
+    ★ 2026-10-11 补上 ②：以前只找 ① 和 ③，于是**部署之后不带参数跑，
+      验的其实是 `dist/` 里那份**（内容通常一样，但这个检查的全部意义就是
+      「验实际要用的那份」—— 部署那一步真出问题（覆盖失败、目标被占用而
+      没换掉）时，验 dist 会给出**假的安心**）。要专门验刚打的产物，把
+      路径当参数传进来。
     """
     if len(argv) > 1:
         return Path(argv[1])
-    for cand in (
-        ROOT / "Mindustry启动器.exe",
-        ROOT / "dist" / "Mindustry启动器" / "Mindustry启动器.exe",
-    ):
+    runtime = find_runtime_root(required=False)
+    cands = [ROOT / "Mindustry启动器.exe"]
+    if runtime is not None:
+        cands.append(runtime / "Mindustry启动器.exe")
+    cands.append(ROOT / "dist" / "Mindustry启动器" / "Mindustry启动器.exe")
+    for cand in cands:
         if cand.exists():
             return cand
     raise SystemExit(

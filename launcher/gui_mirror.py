@@ -32,7 +32,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from . import mirrortest
-from .config import normalize_mirror, normalize_mirror_rounds
+from .config import MAX_MIRROR_ROUNDS, normalize_mirror
 from .i18n import t
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,12 @@ class MirrorTestMixin:
             self._mirror_test_canceling = True
             self._mirror_test_refresh_progress()
             return
+        # ★ 轮数先读、先校验：界面上显示几轮就必须跑几轮 —— 不合法
+        #   （空/非整数/超范围）会弹错并返回 None，这里直接收手，后面的
+        #   状态一律不动（不给「填错值」留半初始化痕迹）。
+        rounds = self._mirror_test_rounds_from_ui()
+        if rounds is None:
+            return
         targets = self._mirror_test_targets()
         total = min(len(targets), mirrortest.MAX_TARGETS)
         # 每一轮都是新的取消信号：上一轮 set 过的 Event 不能带过来
@@ -61,12 +67,11 @@ class MirrorTestMixin:
         self._mirror_test_cancel = threading.Event()
         # 进度显示的初态：采样 0 / (候选数 × 轮数)、还没有「当前采样」。
         # ★ 轮数用设置页**当前填的**值（即测即用 —— 不必先保存，跟旁边
-        #   Java「检测」按钮、镜像本身都是同一口径；读不到才退已保存的
-        #   配置值，见 _mirror_test_rounds_from_ui）—— 采样总数 = 候选数
-        #   × 轮数，直接决定等待时长；后台线程拿的是同一份值（随线程参数
-        #   传下去，见 _mirror_test_task）。
+        #   Java「检测」按钮、镜像本身都是同一口径，见上面 rounds 的读取）
+        #   —— 采样总数 = 候选数 × 轮数，直接决定等待时长；后台线程拿的
+        #   是同一份值（随线程参数传下去，见 _mirror_test_task）。
         self._mirror_test_total = total
-        self._mirror_test_rounds = self._mirror_test_rounds_from_ui()
+        self._mirror_test_rounds = rounds
         self._mirror_test_samples = 0
         self._mirror_test_cur_prefix = None
         self._mirror_test_canceling = False
@@ -104,19 +109,29 @@ class MirrorTestMixin:
                 out.append(prefix)
         return out
 
-    def _mirror_test_rounds_from_ui(self) -> int:
-        """测速用几轮：**界面当前填的值优先**（即测即用）。
+    def _mirror_test_rounds_from_ui(self) -> int | None:
+        """读设置页当前填的轮数：**合法就用、不合法弹错并中止**。
 
-        跟 Java「检测」按钮一个哲学 —— 动作用眼前的值，不必先保存；
-        读不到界面值（框是空的/填得不合法）才退回已保存的配置值，别让
-        测速为这种事罢工。只影响**这一次测速**：绝不写回配置（想固定
-        下来，照旧要「保存并返回」）。
+        跟 Java「检测」按钮一个哲学 —— 动作用眼前的值，不必先保存。
+        ★ 界面上显示什么，就必须用什么：空框 / 非整数 / 超范围一律
+        **弹错拦下**（返回 None），绝不悄悄夹成别的值 —— 否则会出现
+        「界面显示 5、实际跑 3」这种最伤人的不一致（2026-10-12 用户
+        实测反馈）。合法时只影响**这一次测速**：绝不写回配置（想固定
+        下来照旧要「保存并返回」；保存时走的也是本函数，两处口径完全
+        一致，不会一个严一个松）。
         """
         try:
-            return normalize_mirror_rounds(self.mirror_test_rounds_var.get())
+            raw = self.mirror_test_rounds_var.get()
         except tk.TclError:
-            pass
-        return normalize_mirror_rounds(self.config.get("mirror_test_rounds"))
+            raw = None
+        if raw is not None and 1 <= raw <= MAX_MIRROR_ROUNDS:
+            return raw
+        logger.warning(f"测速轮数不合法（界面填了 {raw!r}），已拦下并提示")
+        messagebox.showerror(
+            t("err.rounds_title"),
+            t("err.rounds_body", max=MAX_MIRROR_ROUNDS),
+        )
+        return None
 
     # ---------- 后台线程 ----------
 
@@ -126,8 +141,9 @@ class MirrorTestMixin:
         """后台线程：交错多轮测完所有候选（这里唯一碰网络的地方）。
 
         ``rounds`` 由调用方（GUI 线程）读出后传进来（界面当前值优先，
-        读不到才退配置，见 ``_mirror_test_rounds_from_ui``）—— 后台线程
-        不自己去读配置，避免「读的时候设置页正在被重建」这类跨线程意外。
+        不合法会被拦下，见 ``_mirror_test_rounds_from_ui``）—— 后台
+        线程不自己去读配置，避免「读的时候设置页正在被重建」这类
+        跨线程意外。
 
         ⚠️ 不接 ``on_result``：交错采样下它要**所有轮次跑完**才逐条到达，
         拿它画进度会「全程 0、末尾连跳 N 格」。进度只看 ``on_progress``

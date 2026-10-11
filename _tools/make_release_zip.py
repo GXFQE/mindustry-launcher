@@ -408,7 +408,7 @@ the "ENGLISH" line further down.
 · GitHub 镜像 —— 下载加速用，留空＝直连 GitHub；旁边的 "测速" 会
   实测各候选的下载速度（带进度条），"用最快的" 一键填回设置
 · 测速轮数 —— 1~3（默认 3）：每轮把每个候选各测一次，轮数越多排名越稳、
-  等待越久；改完点 "测速" 立即生效；嫌慢就调低
+  等待越久；改完点 "测速" 立即生效；嫌慢就调低；超出 1~3 会当场提示
 · 使用 GitHub CLI 认证（默认关）—— 本机装了 GitHub CLI（gh）并登录过的
   话，勾上它，GitHub 请求带上认证：API 额度从 60 次/时（按出口 IP 共享）
   提高到 5000 次/时。令牌只放在内存里、不写文件；镜像站和自定义来源收不到它
@@ -622,7 +622,8 @@ WHAT YOU CAN CHANGE IN SETTINGS
   (with a progress bar), and "用最快的" (Use fastest) applies the winner
 - Test rounds -- 1 to 3 (default 3): every round tests each candidate once,
   so more rounds = steadier but slower. It takes effect as soon as you press
-  "Test". Turn it down if the wait annoys you
+  "Test". Turn it down if the wait annoys you; values outside the range are
+  rejected with a prompt
 - Use GitHub CLI authentication (off by default) -- if GitHub CLI (gh) is
   installed and logged in, tick it and GitHub requests get authenticated: the API
   quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in

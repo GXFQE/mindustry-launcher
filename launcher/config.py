@@ -250,8 +250,11 @@ MAX_MIRROR_PRESETS = 20
 
 # ★ 测速时每个候选采几轮（见 mirrortest）：交错多轮，采得越少越快、
 #   越多越稳。1 轮 = 每条候选只抽 1 次样本，抖动链路上排名近似抽签；
-#   3 轮 = 取中位，抗单次尖峰。上限定 3：再多对「谁最快」这个结论收益
-#   极小，而等待随候选数线性变长（5 候选 × 3 轮实测约 70 秒）。
+#   3 轮 = 取中位，抗单次尖峰，也是默认值。上限定 3：再多对「谁最快」
+#   这个结论收益极小，而等待随候选数线性变长（5 候选 × 3 轮实测约 70 秒）。
+#   ⚠️ 界面层（设置页保存 / 测速）对超范围是**弹错拦下**、不是夹取 ——
+#   界面上显示几轮就必须跑几轮（2026-10-12 教训：静默夹取造成
+#   「显示 5、实际跑 3」的误导）。
 DEFAULT_MIRROR_ROUNDS = 3
 MAX_MIRROR_ROUNDS = 3
 
@@ -314,6 +317,11 @@ def normalize_mirror_presets(raw: Any) -> list[str]:
 def normalize_mirror_rounds(raw: Any, *, what: str = "mirror_test_rounds") -> int:
     """测速轮数：非整数退回默认，超范围夹到区间内（不抛异常）。
 
+    这里只服务**配置读取容错**（手改 config.json 写脏了不许崩）——
+    界面层（设置页保存 / 测速）是另一套严格口径：超范围**弹错拦下**、
+    绝不静默夹取（否则会出现「界面显示 5、实际跑 3」的误导，见
+    gui_mirror._mirror_test_rounds_from_ui）。
+
     ``what`` 只是给 WARNING 用的，**默认就填配置键名**：这一项同样可以
     手改 config.json，告警里点名键名，用户才能拿它去文件里找到是哪一行
     （同 ``normalize_log_keep`` / ``normalize_bool`` 的路子）。
@@ -325,7 +333,12 @@ def normalize_mirror_rounds(raw: Any, *, what: str = "mirror_test_rounds") -> in
             f"配置项 {what}={raw!r} 不是整数，按默认 {DEFAULT_MIRROR_ROUNDS} 处理"
         )
         return DEFAULT_MIRROR_ROUNDS
-    return max(1, min(n, MAX_MIRROR_ROUNDS))
+    clamped = max(1, min(n, MAX_MIRROR_ROUNDS))
+    if clamped != n:
+        logger.warning(
+            f"配置项 {what}={n} 超出范围 1~{MAX_MIRROR_ROUNDS}，已按 {clamped} 处理"
+        )
+    return clamped
 
 
 def normalize_log_keep(raw: Any, *, what: str = "max_log_files") -> int:

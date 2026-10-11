@@ -11,7 +11,6 @@ from .config import (
     ConfigManager,
     normalize_log_keep,
     normalize_mirror,
-    normalize_mirror_rounds,
 )
 from . import ghauth
 from .gamecmd import check_extra_args, probe_java, split_args
@@ -563,7 +562,7 @@ class MainMixin:
         ).pack(side=tk.LEFT)
         _auto_wrap_hint(ttk.Label(
             rounds_row,
-            text=t("settings.hint.mirror_rounds"),
+            text=t("settings.hint.mirror_rounds", max=MAX_MIRROR_ROUNDS),
             font=("Microsoft YaHei", 8),
             foreground="#777777",
         )).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
@@ -1005,16 +1004,11 @@ class MainMixin:
                 t("err.logs_body", max=MAX_LOG_KEEP),
             )
             return False
-        try:
-            mirror_rounds = normalize_mirror_rounds(
-                self.mirror_test_rounds_var.get(), what="测速轮数"
-            )
-        except tk.TclError as e:
-            logger.warning(f"测速轮数不合法: {e}")
-            messagebox.showerror(
-                t("err.rounds_title"),
-                t("err.rounds_body", max=MAX_MIRROR_ROUNDS),
-            )
+        # 测速轮数：与「测速」按钮共用同一个读取器 —— 不合法（空/非整数/
+        # 超范围）一律**弹错留页**，绝不静默夹取（否则「显示 5、保存后
+        # 变 3」，2026-10-12 用户实测反馈）。
+        mirror_rounds = self._mirror_test_rounds_from_ui()
+        if mirror_rounds is None:
             return False
         warnings = check_extra_args(extra_vm_args)
         if warnings and not messagebox.askyesno(

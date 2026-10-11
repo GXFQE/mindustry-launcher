@@ -882,7 +882,12 @@ def main() -> int:
         #   「用最快的」把哪个地址填回了下拉框。测速逻辑本身在
         #   code_regression [12b] 里用本地 HTTP 服务真跑。
         import launcher.mirrortest as MT
+        import launcher.gui_mirror as MM
+        from launcher.config import MAX_MIRROR_ROUNDS
         real_test_mirrors = MT.test_mirrors
+        # ★ gui_mirror 的弹错走它自己的 messagebox 引用 —— 也换成假件，
+        #   否则「轮数不合法」的断言会弹出真模态框把 pump 堵死。
+        MM.messagebox = fake_mb
         fake_speed = {
             SMOKE_MIRROR_PRESETS[0]: 5_000_000.0,
             SMOKE_MIRROR_PRESETS[1]: 300_000.0,
@@ -893,9 +898,9 @@ def main() -> int:
 
         def fake_test_mirrors(prefixes, *, on_result=None, stop_event=None,
                               on_progress=None, **kwargs):
-            # ★ 界面读出轮数（即测即用，见 _mirror_test_rounds_from_ui）后
-            #   随调用传下来 —— 记下来给下面的断言用（假核心不分轮，只验
-            #   「传没传、传得对不对」）。
+            # ★ 界面读出轮数（即测即用；不合法会被先拦下、根本走不到这
+            #   里，见 _mirror_test_rounds_from_ui）后随调用传下来 —— 记
+            #   下来给下面的断言用（假核心不分轮，只验「传没传、对不对」）。
             seen_rounds["v"] = kwargs.get("rounds")
             out = []
             for p in prefixes:
@@ -991,6 +996,24 @@ def main() -> int:
             else:
                 win.destroy()               # 别把 pump 永远堵在模态循环里
             picked["done"] = True
+
+        # ★ 超范围必须「当场弹错拦下」，不能静默夹回上限（2026-10-12 用户
+        #   实测：填 5 → 界面显示 5、实际却按 3 跑 —— 最伤人的不一致）。
+        #   这里填一个刚超过上限的值点测速：应弹错、且测速不启动（假核心
+        #   一次都不该被调）。
+        if test_btn is not None:
+            app.mirror_test_rounds_var.set(MAX_MIRROR_ROUNDS + 1)
+            calls_before = len(fake_mb.calls)
+            test_btn.invoke()
+            new_calls = fake_mb.calls[calls_before:]
+            check("★ 轮数超范围：点测速明确弹错（不再静默夹回上限）",
+                  any(k == "showerror" and "测速轮数" in title
+                      for k, title, _ in new_calls),
+                  str(new_calls))
+            check("★ 轮数超范围：测速不启动（假核心没被调用）",
+                  "v" not in seen_rounds and not app._mirror_test_running(),
+                  f"rounds={seen_rounds.get('v')!r} / "
+                  f"running={app._mirror_test_running()}")
 
         # ★ 「即测即用」的对照量：界面填的值与配置里的值必须不同，测速该
         #   用界面那个（改完**不保存**）。取「与配置不同」而非写死 1：

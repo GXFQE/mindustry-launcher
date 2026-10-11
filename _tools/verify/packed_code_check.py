@@ -192,8 +192,10 @@ REQUIRED = {
         "open_log_window",
         # 镜像地址 + 日志保留份数；两帧共用一个标签列宽（输入框才对得齐）
         "github_mirror_var", "max_log_files_var", "normalize_mirror",
-        # 2026-10-11：测速轮数（采样总数 = 候选数 × 轮数，直接决定等待）
-        "mirror_test_rounds_var", "normalize_mirror_rounds",
+        # 2026-10-11：测速轮数（采样总数 = 候选数 × 轮数，直接决定等待）。
+        # 2026-10-12：保存与测速共用 gui_mirror 的读取器（超范围弹错拦下、
+        # 不静默夹取）—— 这里钉上限常量，读取器本身在 gui_mirror 名单里。
+        "mirror_test_rounds_var", "MAX_MIRROR_ROUNDS",
         "_label_col_width",
         # 2026-10-05：界面文案接进语言包。原来写死的两个模块级常量
         # （SETTINGS_LABEL_TEXTS / LAUNCHER_UPDATE_LABELS）已删，改成函数 ——
@@ -324,7 +326,8 @@ REQUIRED = {
         "_mirror_display_name", "_mirror_status_text",
         # 换语言的整页重建会把按钮换掉 —— 改按钮文字要吞 TclError
         "_set_mirror_test_button", "mirrortest", "normalize_mirror",
-        "normalize_mirror_rounds", "t",
+        # 2026-10-12：超范围弹错要报「1~MAX」——上限常量进包才算新版本
+        "MAX_MIRROR_ROUNDS", "t",
     ],
     # 2026-10-07 新增：GitHub CLI 认证（复用本机 gh 登录态，API 额度 60→5000）。
     # 不在包里 = exe 还是「匿名请求、被共享出口 IP 的 60 次/时卡住」的旧版本。

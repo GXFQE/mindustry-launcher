@@ -1294,6 +1294,17 @@ def test_mirror_and_log_keep():
     check("脏测速轮数的告警点名了配置键 mirror_test_rounds",
           any("mirror_test_rounds" in m for m in _msgs), str(_msgs))
 
+    # 超范围（配置层容错会夹取）也要留痕：静默改值是「显示 5、实跑 3」
+    # 那类误导的病根（2026-10-12）—— 配置层用告警留痕，界面层直接弹错。
+    _msgs.clear()
+    _cfg_log.addHandler(_h)
+    try:
+        normalize_mirror_rounds(99)
+    finally:
+        _cfg_log.removeHandler(_h)
+    check("超范围（99）夹取的告警也点名了配置键 mirror_test_rounds",
+          any("mirror_test_rounds" in m for m in _msgs), str(_msgs))
+
     # ---- 下拉框的候选镜像站也进了 config.json（github_mirror_presets）----
     # 这一项存在的理由就是「让人手改配置文件」，所以脏成什么样都不许崩。
     presets_cases = [

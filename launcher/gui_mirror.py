@@ -32,7 +32,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from . import mirrortest
-from .config import normalize_mirror
+from .config import normalize_mirror, normalize_mirror_rounds
 from .i18n import t
 
 logger = logging.getLogger(__name__)
@@ -60,13 +60,13 @@ class MirrorTestMixin:
         #（否则新线程一进循环就判「已取消」，秒退）。
         self._mirror_test_cancel = threading.Event()
         # 进度显示的初态：采样 0 / (候选数 × 轮数)、还没有「当前采样」。
-        # ★ 轮数取设置项（mirror_test_rounds，设置页可调，1~3）—— 采样
-        #   总数 = 候选数 × 轮数，直接决定等待时长；后台线程拿的是同一份
-        #   值（随线程参数传下去，见 _mirror_test_task）。
+        # ★ 轮数用设置页**当前填的**值（即测即用 —— 不必先保存，跟旁边
+        #   Java「检测」按钮、镜像本身都是同一口径；读不到才退已保存的
+        #   配置值，见 _mirror_test_rounds_from_ui）—— 采样总数 = 候选数
+        #   × 轮数，直接决定等待时长；后台线程拿的是同一份值（随线程参数
+        #   传下去，见 _mirror_test_task）。
         self._mirror_test_total = total
-        self._mirror_test_rounds = max(
-            1, int(self.config.get("mirror_test_rounds"))
-        )
+        self._mirror_test_rounds = self._mirror_test_rounds_from_ui()
         self._mirror_test_samples = 0
         self._mirror_test_cur_prefix = None
         self._mirror_test_canceling = False
@@ -104,6 +104,20 @@ class MirrorTestMixin:
                 out.append(prefix)
         return out
 
+    def _mirror_test_rounds_from_ui(self) -> int:
+        """测速用几轮：**界面当前填的值优先**（即测即用）。
+
+        跟 Java「检测」按钮一个哲学 —— 动作用眼前的值，不必先保存；
+        读不到界面值（框是空的/填得不合法）才退回已保存的配置值，别让
+        测速为这种事罢工。只影响**这一次测速**：绝不写回配置（想固定
+        下来，照旧要「保存并返回」）。
+        """
+        try:
+            return normalize_mirror_rounds(self.mirror_test_rounds_var.get())
+        except tk.TclError:
+            pass
+        return normalize_mirror_rounds(self.config.get("mirror_test_rounds"))
+
     # ---------- 后台线程 ----------
 
     def _mirror_test_task(
@@ -111,9 +125,9 @@ class MirrorTestMixin:
     ) -> None:
         """后台线程：交错多轮测完所有候选（这里唯一碰网络的地方）。
 
-        ``rounds`` 由调用方（GUI 线程）从设置项 mirror_test_rounds 读出后
-        传进来 —— 后台线程不自己去读配置，避免「读的时候设置页正在被
-        重建」这类跨线程意外。
+        ``rounds`` 由调用方（GUI 线程）读出后传进来（界面当前值优先，
+        读不到才退配置，见 ``_mirror_test_rounds_from_ui``）—— 后台线程
+        不自己去读配置，避免「读的时候设置页正在被重建」这类跨线程意外。
 
         ⚠️ 不接 ``on_result``：交错采样下它要**所有轮次跑完**才逐条到达，
         拿它画进度会「全程 0、末尾连跳 N 格」。进度只看 ``on_progress``

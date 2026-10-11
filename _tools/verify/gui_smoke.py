@@ -893,8 +893,9 @@ def main() -> int:
 
         def fake_test_mirrors(prefixes, *, on_result=None, stop_event=None,
                               on_progress=None, **kwargs):
-            # ★ 界面从设置项读出轮数后随调用传下来 —— 记下来给下面的断言用
-            #   （假核心不分轮，只验「传没传、传得对不对」）。
+            # ★ 界面读出轮数（即测即用，见 _mirror_test_rounds_from_ui）后
+            #   随调用传下来 —— 记下来给下面的断言用（假核心不分轮，只验
+            #   「传没传、传得对不对」）。
             seen_rounds["v"] = kwargs.get("rounds")
             out = []
             for p in prefixes:
@@ -947,9 +948,9 @@ def main() -> int:
             条的读数是「后台事件 → run_on_gui → 刷控件」推出来的，头几轮
             事件到齐前可能还是 0 —— 没看到就稍后再看一眼（最多 ~1.2 s）。
             假实现每个候选停 0.4 s、共 3 个，窗口足够大。
-            刻度 = 候选数 × 设置轮数（采样次数，见 mirror_test_rounds），
-            读数 = 已跑完的采样 + 当前这次的时间比例 —— 假实现不分轮，
-            只走到 1/3 左右。
+            刻度 = 候选数 × 本次用的轮数（采样次数，即测即用，见
+            _mirror_test_rounds_from_ui）—— 假实现不分轮、按候选逐个推
+            事件，探针在第一个候选期间就会取到「>0 且未满格」的读数。
             """
             bar = getattr(app, "mirror_progress", None)
             try:
@@ -991,7 +992,14 @@ def main() -> int:
                 win.destroy()               # 别把 pump 永远堵在模态循环里
             picked["done"] = True
 
+        # ★ 「即测即用」的对照量：界面填的值与配置里的值必须不同，测速该
+        #   用界面那个（改完**不保存**）。取「与配置不同」而非写死 1：
+        #   将来默认值改了，这条断言依然有区分度。
+        cfg_before = app.config.get("mirror_test_rounds")
+        alt_rounds = 1 if cfg_before != 1 else 2
+
         if test_btn is not None:
+            app.mirror_test_rounds_var.set(alt_rounds)   # 只改界面、不保存
             app.root.after(120, probe_running)
             app.root.after(150, probe_dialog)
             test_btn.invoke()
@@ -1000,10 +1008,13 @@ def main() -> int:
             pump(app, 8.0)
         check("点「测速」后结果窗弹了出来（探针跑完了）",
               picked["done"] is True, str(picked))
-        check("★ 测速用的是设置项里的轮数（假核心收到的 rounds == 配置值）",
-              seen_rounds.get("v") == app.config.get("mirror_test_rounds"),
-              f"收到 {seen_rounds.get('v')!r} / "
-              f"配置 {app.config.get('mirror_test_rounds')!r}")
+        check("★ 即测即用：测速用界面当前填的轮数（改完不保存也生效）",
+              seen_rounds.get("v") == alt_rounds,
+              f"收到 {seen_rounds.get('v')!r} / 界面填 {alt_rounds!r} / "
+              f"配置 {cfg_before!r}")
+        check("★ 即测即用不写配置：测速跑完后 config 里的轮数原样没动",
+              app.config.get("mirror_test_rounds") == cfg_before,
+              f"{app.config.get('mirror_test_rounds')!r} / 原 {cfg_before!r}")
         check("★ 测速中：进度条摆出来、读数随采样推进（看着不像卡住）",
               running.get("visible") is True
               and isinstance(running.get("value"), float)

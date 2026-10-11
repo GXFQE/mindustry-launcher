@@ -316,12 +316,15 @@ REQUIRED = {
         "MirrorTestMixin", "mirror_test_click",
         # 候选 = 直连 + 下拉清单 + 当前手填（去重保序）；测速走后台线程
         "_mirror_test_running", "_mirror_test_targets",
+        # ★ 轮数即测即用：界面当前值优先、读不到才退配置（2026-10-12）
+        "_mirror_test_rounds_from_ui",
         "_mirror_test_task", "_mirror_test_done",
         # 结果窗（表格 + 用最快的 / 应用选中）；填回只改内存、不落盘
         "_mirror_test_show", "_mirror_test_apply",
         "_mirror_display_name", "_mirror_status_text",
         # 换语言的整页重建会把按钮换掉 —— 改按钮文字要吞 TclError
-        "_set_mirror_test_button", "mirrortest", "normalize_mirror", "t",
+        "_set_mirror_test_button", "mirrortest", "normalize_mirror",
+        "normalize_mirror_rounds", "t",
     ],
     # 2026-10-07 新增：GitHub CLI 认证（复用本机 gh 登录态，API 额度 60→5000）。
     # 不在包里 = exe 还是「匿名请求、被共享出口 IP 的 60 次/时卡住」的旧版本。

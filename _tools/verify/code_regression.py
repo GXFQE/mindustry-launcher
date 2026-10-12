@@ -1725,7 +1725,7 @@ def test_mirror_speed_test():
               agg.speed_low_bps == 100.0 and agg.speed_high_bps == 900.0
               and abs(agg.spread - 9.0) < 1e-9, f"spread={agg.spread}")
 
-        # ★ 上下限要连 timeout 一起看：本机链路实测的主模式是「一轮快
+        # ★ 上下限要连 timeout 一起看：抖动链路实测的主模式是「一轮快
         # （ok）、一轮慢到读不够（timeout）」交替 —— 只用 ok 样本算上下限
         # 的话，慢的那轮根本进不来，spread 显示 1.0，「波动大」的提示
         # 永远不出现（2026-10-11 深夜 C 段实测抓到）。

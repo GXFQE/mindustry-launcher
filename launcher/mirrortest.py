@@ -351,7 +351,7 @@ def _aggregate_samples(prefix: str, samples: Sequence[MirrorResult]) -> MirrorRe
     ★ 上下限（``speed_low/high_bps``）取**全部有速度的样本**，连 timeout
       一起算 —— timeout 的「读不完」也是用实际读到的部分算的速度，正是
       「这个候选能慢到什么程度」的直接观测。
-      ⚠️ 只用 ok 样本会把**最典型的不稳**过滤掉：实测本机链路常在
+      ⚠️ 只用 ok 样本会把**最典型的不稳**过滤掉：抖动链路实测常在
       「一轮快（ok）、一轮慢得读不够（timeout）」之间交替，慢的那轮根本
       进不了 ok 样本 —— spread 反而显示 1.0，「波动大」的提示永远不出现。
       中位数仍然只由 ok 样本定（那是「典型速度」），两者别混。

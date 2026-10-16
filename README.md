@@ -39,7 +39,47 @@ Chinese in the first half, English in the second.
   stopped instead of starting over.
 - **Launch pre-warming** — the selected version's files are assembled in the background
   while the window is open, so launching is quicker.
+- **Launch from the command line** — `--launch "Mindustry v146"` in a console goes
+  straight into that version with **no launcher window at all** (see below).
 - **Log viewer** — captures the game's output so you can read it after it exits.
+
+## Launching a version from the command line
+
+Pass an argument from a console (cmd, PowerShell, Windows Terminal) and it goes straight
+into that version. **The launcher window never appears** — all you see is the game:
+
+```
+"Mindustry启动器.exe" --launch "Mindustry v146"
+```
+
+- The version name is the line shown in the main window's list (`Mindustry v146`,
+  `BE v146`, ...). You can also pass just the version number (`v146`) — as long as only
+  one type has it; if several do, the launcher asks you to spell out the full name
+  instead of guessing.
+- Progress and results are written to **the console you typed the command in**: which
+  version is starting, that it came up (with the time it took), that the game exited
+  (with how long you played), and whether this session was backed up.
+- When the game exits, the launcher **exits on its own** — the "close the launcher after
+  the game exits" setting does not apply here, because this form has neither a window nor
+  a tray icon, so there would be no way to close it. The automatic backup still runs,
+  under the rules of the profile you were playing in.
+- When it finishes, the **last line** in the console is `Launcher exited (exit code N)` —
+  **that line is the "finished" signal** (cmd does **not wait** for windowed programs: the
+  prompt comes back the moment you press Enter, *before* the program's output; so no new
+  prompt appears when it finishes — trust that line). Prefer the
+  "prompt-returns-only-when-done" feel? Put the command in a `.bat` (cmd waits in
+  scripts), or prefix it with `start /wait`.
+- A wrong name — or a `--launch` with no name after it — launches **nothing**: the
+  console explains why (listing your versions when the name was wrong) and no extra
+  window appears.
+- Exit codes are meaningful, so scripts can branch on them: `0` success (quitting the
+  game after playing counts as success), `1` the launcher crashed, `2` bad command line,
+  `3` no such version, `4` the version was found but would not start.
+  `--launch=<name>` works too, and the console you pressed Enter in is the one used.
+
+★ A shortcut can carry the argument as well (double-click and play). There is no console
+to write to in that case, so problems fall back to a dialog box — run it from a console
+and every message stays in that console.
 
 ## Where your data lives
 

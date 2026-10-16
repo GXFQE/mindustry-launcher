@@ -43,6 +43,8 @@ launcher/               全部源码
     updates.py          更新检查与下载（游戏本体）
     selfupdate.py       ★ 启动器自身更新（查新版 → 下精简包 → 退出时换文件）
     gamecmd.py          启动参数解析 + 命令行拼装
+    cli.py              启动器自己的命令行参数（--launch：直接启动指定版本）
+    console.py          把话说给「敲命令的那个控制台」（附父进程控制台 + 按代码页编码）
     gamelog.py          游戏输出捕获（落盘 + 内存缓冲 + 管道编码兜底）
     gui_core.py         界面内核：线程队列、状态栏、窗口骨架
     gui_*.py            各功能页（主界面 / 启动 / 版本 / 存档分类 / 备份 / 日志 / 设置）
@@ -59,9 +61,9 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（448 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（520 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（138 项，不起游戏）
+python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（164 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物
@@ -155,7 +157,7 @@ python _tools/verify/release_check.py           # 解压即用（会弹 GUI 窗�
 ## 界面语言内部约定
 
 界面文案全部放在 `lang/*.json` 里，代码只写 key（`t("settings.save_return")`）。
-2026-10-05 起**全部模块（21 个源文件）已迁完，355 条 key**，门禁是条硬线：
+2026-10-05 起**全部模块已迁完**（现在 27 个源文件、410 条 key），门禁是条硬线：
 代码里再写死一条界面文案，`i18n_check.py` 当场报错。
 
 - **`zh_CN.json` 是基准包**：新增文案先写它，再补别的语言。两份文件的 key 集合与

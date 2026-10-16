@@ -41,6 +41,11 @@
 22) **GitHub 镜像测速**（12b）：探针的每条状态路径都用本地 HTTP 服务真跑
     （读满 / 太慢 / 错误页 / 404 / 拒连 / 取消）；批量测速的候选上限与中途
     取消；结果的排序与格式化 —— 尤其是不许拿几 KB 的错误页当"最快"
+23) **启动器自己的命令行参数**（--launch）：解析（两种写法、缺值算写坏、
+    不认识的参数一律忽略、重复给取最后一个有效值）与版本匹配（只做精确
+    匹配：显示名 → 原始版本号；撞名返回候选**不猜**，前缀不算命中）；以及
+    接线 —— 入口 → CoreMixin → 启动路径的 confirm=False，都用 AST 钉住。
+    这条链断掉是**静默失效**（启动器照常打开，只是没启动你要的版本）
 
 项数见末尾统计（改完 launcher/ 就该跑一遍）。
 """
@@ -85,6 +90,8 @@ from _paths import DATA, MANIFESTS, VERSIONS  # noqa: E402
 os.environ["MDT_LANG"] = "zh_CN"
 
 import launcher.storage as S  # noqa: E402
+from launcher import cli as CLI  # noqa: E402
+from launcher import console as CONSOLE  # noqa: E402
 from launcher.gui_core import CoreMixin  # noqa: E402
 from launcher.gui_game import GameMixin  # noqa: E402
 
@@ -330,17 +337,28 @@ class FakeListbox:
 
 
 class FakeVM2:
-    """只记录调用，不真拼 jar。"""
+    """只记录调用，不真拼 jar。
 
-    def __init__(self, root):
+    ★ ``gate`` 是一道可选闸门：预热是**丢进线程池**跑的，而「忙」这个标志
+      在任务干完那一刻就翻回 False —— 不装闸的话，「刚提交完就查忙不忙」
+      这句话就是在跟线程赛跑（本机同时开着游戏时真的输过一次：任务已经
+      跑完，于是那句断言红了，而代码一点问题都没有）。装上闸门，工作线程
+      会停在 ``build_runtime_jar`` 里等测试看完状态再放行，断言就确定了。
+    """
+
+    def __init__(self, root, gate=None):
         self.root = root
         self.built = []
         self.gc_calls = []
+        #: 开着就卡住拼装（测试看完「忙」再 set 放行）；None = 不卡
+        self.gate = gate
 
     def manifest_digest(self, vtype, version):
         return f"digest-{vtype}-{version}"
 
     def build_runtime_jar(self, vtype, version, out):
+        if self.gate is not None:
+            self.gate.wait(timeout=15)      # 放行之后（含后续调用）都是直接过
         self.built.append((vtype, version, str(out)))
         Path(out).write_bytes(b"fake jar " + vtype.encode())
         return out
@@ -403,9 +421,12 @@ def test_preheat():
     check("初始没有预热结果", app._take_preheated_jar(k1) is None)
     check("初始不算忙", app.preheat_busy() is False)
 
-    # 预热 V1
+    # 预热 V1。★ 装上闸门：让工作线程停在拼装里，这样「忙」是被**看到**的，
+    # 而不是抢在线程跑完之前猜到的（见 FakeVM2 那段注释）。
+    gate = app.version_manager.gate = threading.Event()
     app._preheat(v1)
     check("预热开始后标记为忙", app.preheat_busy() is True)
+    gate.set()                      # 放行，别把工作线程一直吊着
     wait_idle(app)
     check("预热结束后不再忙", app.preheat_busy() is False)
     check("真的拼了一次", len(app.version_manager.built) == 1)
@@ -559,6 +580,8 @@ def main():
     test_jre_probe_and_permanent_delete()
     test_release_compat_layer()
     test_salvage_game_log()
+    test_cli_launch_args()
+    test_packed_required_table()
     print("\n" + "=" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
     if FAIL:
@@ -2632,8 +2655,10 @@ def test_settings_flow_and_autoclose():
               _has_str(close_fn, "close_on_game_exit"))
         calls = _calls_named(close_fn, "self.run_on_gui")
         check("自动关闭走 on_closing（跟用户点关闭同一条退出路径）",
-              len(calls) == 1 and calls[0].args
-              and _dotted(calls[0].args[0]) == "self.on_closing",
+              len(calls) >= 1 and all(
+                  c.args and _dotted(c.args[0]) == "self.on_closing"
+                  for c in calls
+              ),
               str([_dotted(c.func) for c in calls]))
         check("启动器本来就在退出时不再关第二次",
               len(_calls_named(close_fn, "self.stop_event.is_set")) == 1)
@@ -3534,6 +3559,560 @@ def test_salvage_game_log():
               and any(c is calls[0] for c in ast.walk(n))
               for n in ast.walk(session)
           ))
+
+
+# ---------------- 23. 启动器自己的命令行参数（--launch） ----------------
+def test_cli_launch_args():
+    """``--launch <版本>``：解析规则、匹配规则，以及「接得对不对」。
+
+    为什么值得单列一节：这条链的失败方式是**静默的** —— 参数解析错了、或者
+    接线断了，用户看到的是「启动器开了，但没启动我要的那个版本」，日志里
+    也未必有条目。所以解析/匹配逐条钉住，接线用 AST 钉住。
+
+    ★ 这条路的**形态**和双击那条完全相反，也是这一节后半段的重点：**不建
+    可见窗口**（``--launch`` 就是「直接进游戏」）、**输出走控制台**（用户
+    是在控制台敲的命令）、**游戏退出后一定收工**（那种进程没有窗口也没有
+    托盘，留着用户想关都找不着地方）。这些「一帧都不许露、一句都不许弹」
+    的地方，靠读代码看不住（改一行 withdraw 就退化），所以钉在 AST 上。
+    """
+    print("\n[23] 启动器自己的命令行参数（--launch 直接启动指定版本）")
+
+    # ---------------------------------------------------------- 解析
+    p = CLI.parse_cli
+
+    def req(argv):
+        return p(argv)
+
+    r = req(["--launch", "Mindustry v146"])
+    check("--launch <名字>：取到值、不算写坏",
+          r.launch == "Mindustry v146" and not r.bad_usage, str(r))
+    r = req(["--launch=Mindustry v146"])
+    check("--launch=<名字>：等号写法同样认",
+          r.launch == "Mindustry v146" and not r.bad_usage, str(r))
+    r = req(["--launch", "  v147  "])
+    check("值两端空白被去掉（从快捷方式里复制粘贴常带出来）",
+          r.launch == "v147" and not r.bad_usage, str(r))
+    r = req(["--debug", "--launch", "v146"])
+    check("自家兄弟参数（--debug）不被误伤，--launch 照常解析",
+          r.launch == "v146" and not r.bad_usage, str(r))
+    r = req(["--launch"])
+    check("--launch 后面什么都没跟 ⇒ 算写坏（bad_usage），不瞎猜",
+          r.launch == "" and r.bad_usage, str(r))
+    r = req(["--launch", "--debug"])
+    check("★ --launch 后面跟的是另一个开关 ⇒ 也算写坏（不许把开关当版本名）",
+          r.launch == "" and r.bad_usage, str(r))
+    r = req(["--launch="])
+    check("--launch= （空值）⇒ 算写坏",
+          r.launch == "" and r.bad_usage, str(r))
+    r = req([])
+    check("没有我们认识的参数 ⇒ 空请求（等于双击启动）",
+          r.launch == "" and not r.bad_usage, str(r))
+    r = req(["--apply-update", "plan.json", "--debug"])
+    check("完全不认识的参数一律忽略，不会变成版本名",
+          r.launch == "" and not r.bad_usage, str(r))
+    r = req(["--launch", "A", "--launch", "B"])
+    check("重复给 ⇒ 取最后一个有效值",
+          r.launch == "B" and not r.bad_usage, str(r))
+    r = req(["--launch", "--launch", "C"])
+    check("中间写坏一次、另一次给对了 ⇒ 按对的那个来（不为笔误罢工）",
+          r.launch == "C" and not r.bad_usage, str(r))
+
+    # ---------------------------------------------------------- 匹配
+    vs = [
+        {"name": "BE v146", "raw_version": "v146"},
+        {"name": "Mindustry v146", "raw_version": "v146"},
+        {"name": "Mindustry v147", "raw_version": "v147"},
+    ]
+
+    def m(q):
+        return CLI.match_version(vs, q)
+
+    hit, cand = m("Mindustry v146")
+    check("显示名精确命中（就是列表里那一行）",
+          hit is vs[1] and cand == [], str((hit, cand)))
+    hit, cand = m("  be V146 ")
+    check("忽略大小写与两端空白",
+          hit is vs[0] and cand == [], str((hit, cand)))
+    hit, cand = m("v147")
+    check("只写版本号、且唯一 ⇒ 命中（不用连类型一起打）",
+          hit is vs[2] and cand == [], str((hit, cand)))
+    hit, cand = m("v146")
+    check("★ 版本号撞多个类型 ⇒ 不猜，把候选交出来让用户写全名",
+          hit is None and cand == ["BE v146", "Mindustry v146"],
+          str((hit, cand)))
+    hit, cand = m("Mindustry v14")
+    check("★ 只做精确匹配：前缀不算命中（猜错版本＝写错存档目录）",
+          hit is None and cand == [], str((hit, cand)))
+    hit, cand = m("不存在")
+    check("找不到 ⇒ (None, [])，由调用方去列可用版本",
+          hit is None and cand == [], str((hit, cand)))
+    hit, cand = m("   ")
+    check("空/纯空白：不命中任何版本（不是「当第一个」）",
+          hit is None and cand == [], str((hit, cand)))
+    names, more = CLI.available_names(vs, limit=2)
+    check("可用版本列表会截断（弹窗里不能糊整个列表）",
+          names == ["BE v146", "Mindustry v146"] and more == 1,
+          str((names, more)))
+
+    # ------------------------------------------------------ 接线（AST）
+    entry = ast.parse(
+        (ROOT / "MindustryLauncher.py").read_text(encoding="utf-8"))
+    ctor = [n for n in ast.walk(entry)
+            if isinstance(n, ast.Call) and _callee(n) == "MindustryLauncher"]
+    check("入口真的解析命令行（调了 parse_cli）",
+          any(_callee(n) == "parse_cli" for n in ast.walk(entry)))
+    check("入口把解析结果交给界面（MindustryLauncher(cli_request=…)）",
+          bool(ctor) and any(k.arg == "cli_request"
+                             for k in ctor[0].keywords))
+    check("--apply-update 那条分支还在（更新执行体不能被新参数挤掉）",
+          bool(_calls_named(entry, "run_as_updater"))
+          and _has_str(entry, "--apply-update"))
+
+    core = ast.parse((ROOT / "launcher" / "gui_core.py").read_text(encoding="utf-8"))
+    init = _func_def(core, "__init__")
+    pos = list(init.args.args)
+    defaults = dict(zip([a.arg for a in pos[len(pos) - len(init.args.defaults):]],
+                        init.args.defaults))
+    check("CoreMixin.__init__ 收 cli_request",
+          any(a.arg == "cli_request" for a in pos))
+    check("……且默认值是 None（不带参数构造＝和以前一模一样）",
+          isinstance(defaults.get("cli_request"), ast.Constant)
+          and defaults.get("cli_request").value is None,
+          str(defaults.get("cli_request")))
+    check("请求被存下来（self.cli_request）", _refers(init, "cli_request"))
+    handles = _calls_named(init, "self._handle_cli_launch")
+    refreshes = _calls_named(init, "self.refresh_versions")
+    queued = [
+        n for n in ast.walk(init)
+        if isinstance(n, ast.Call) and _callee(n) == "self.run_on_gui"
+        and n.args and _dotted(n.args[0]) == "self._handle_cli_launch"
+    ]
+    check("★ init 把命令行处理**丢进 GUI 队列**，且排在 refresh_versions 之后"
+          "（直接调用会撞在空列表上：选中被随后的 _apply_versions 覆盖回第 0 项，"
+          "界面高亮的和真正启动的就不是同一行 —— 2026-10-16 端到端跑出来的）",
+          len(refreshes) == 1 and not handles and len(queued) == 1
+          and queued[0].lineno > refreshes[0].lineno,
+          f"refresh={[c.lineno for c in refreshes]} "
+          f"直接调={[c.lineno for c in handles]} "
+          f"入队={[c.lineno for c in queued]}")
+
+    gg = ast.parse((ROOT / "launcher" / "gui_game.py").read_text(encoding="utf-8"))
+    launch = _func_def(gg, "launch_game")
+    launch_version = _func_def(gg, "_launch_version")
+    handler = _func_def(gg, "_handle_cli_launch")
+
+    calls = _calls_named(launch, "self._launch_version")
+    check("按钮那条路：launch_game → _launch_version(confirm=True)",
+          len(calls) == 1
+          and any(k.arg == "confirm" and getattr(k.value, "value", None) is True
+                  for k in calls[0].keywords),
+          str([(k.arg, getattr(k.value, "value", None))
+               for c in calls for k in c.keywords]))
+    submits = [n for n in ast.walk(gg)
+               if isinstance(n, ast.Call)
+               and _callee(n) == "self.executor.submit"
+               and n.args and _dotted(n.args[0]) == "self._monitor_game"]
+    check("★ 启动实现只有一处（_monitor_game 只从 _launch_version 里提交）",
+          len(submits) == 1
+          and any(c is submits[0]
+                  for c in _calls_named(launch_version, "self.executor.submit")),
+          f"{len(submits)} 处")
+    kwonly = [a.arg for a in launch_version.args.kwonlyargs]
+    check("confirm 是仅关键字参数且**没有默认值**（调用方必须显式表态）",
+          kwonly == ["confirm"] and launch_version.args.kw_defaults == [None],
+          f"kwonly={kwonly} defaults={launch_version.args.kw_defaults}")
+    ask = [n for n in ast.walk(launch_version) if _callee(n) == "messagebox.askyesno"]
+    guarded = [
+        n for n in ast.walk(launch_version)
+        if isinstance(n, ast.If)
+        and _refers(n.test, "confirm")
+        and ask and any(c is ask[0] for c in ast.walk(n.test))
+    ]
+    check("★ 确认框被 confirm 挡着（--launch 那条路不该再弹一次）",
+          len(ask) == 1 and len(guarded) == 1,
+          f"askyesno {len(ask)} 处，受 confirm 保护的 {len(guarded)} 处")
+
+    report = _func_def(gg, "_cli_report_missing")
+    check("选中逻辑只有一处（_select_version_row），命令行那条路也走它"
+          "（selection_set 不发 ListboxSelect，按钮那一侧得自己补）",
+          bool(_calls_named(handler, "self._select_version_row"))
+          and not _calls_named(handler, "self.version_listbox.selection_set"))
+
+    # ------------------------------------------- 无界面（--launch 的底线）
+    #
+    # 用户要的是「敲一条命令直接进游戏」，不是「看着启动器」。这一组钉的就是
+    # 那几处「一帧都不许露、一句都不许弹」的地方（2026-10-16 改）。
+    cli_calls = _calls_named(handler, "self._launch_version")
+    check("★ 命令行那条路**直接启动**（不再排定时器等预热）",
+          len(cli_calls) == 1
+          and any(k.arg == "confirm" and getattr(k.value, "value", None) is False
+                  for k in cli_calls[0].keywords)
+          and not _calls_named(handler, "self.root.after"),
+          str([(k.arg, getattr(k.value, "value", None))
+               for c in cli_calls for k in c.keywords]))
+    check("写坏 / 找不到时只说明白（_cli_report_missing / _cli_note），不启动",
+          _refers(handler, "bad_usage")
+          and bool(_calls_named(handler, "self._cli_report_missing"))
+          and bool(_calls_named(handler, "self._cli_note")))
+
+    say = _func_def(gg, "_cli_say")
+    note = _func_def(gg, "_cli_note")
+    check("两个「对用户说话」的出口都在：_cli_say（只报进度）/ _cli_note（要人看见）",
+          say is not None and note is not None)
+    guard_note = [
+        n for n in ast.walk(note)
+        if isinstance(n, ast.If) and _refers(n.test, "_cli_console")
+        and any(_callee(c) == "console.say" for c in ast.walk(n))
+        and any(isinstance(c, ast.Return) for c in n.body)
+    ]
+    boxes = [n for n in ast.walk(note)
+             if isinstance(n, ast.Attribute)
+             and _dotted(n) in ("messagebox.showerror", "messagebox.showwarning")]
+    check("★ _cli_note：**先**看有没有控制台 —— 有就写控制台并返回，"
+          "弹框只留给「没控制台」那一种（双击快捷方式，没有别的渠道）",
+          len(guard_note) == 1 and len(boxes) >= 2
+          and all(b.lineno > guard_note[0].lineno for b in boxes),
+          f"控制台分支 {len(guard_note)} 处，弹框 {[b.lineno for b in boxes]}")
+    check("命令行那条路绝不直接弹框（弹框只经 _cli_note）",
+          not _calls_named(handler, "messagebox.showwarning")
+          and not _calls_named(handler, "messagebox.showerror"))
+    check("……_cli_say 只在接上控制台时写（没接上就只进日志，不弹框）",
+          bool(_calls_named(say, "console.say"))
+          and any(_refers(n.test, "_cli_console")
+                  for n in ast.walk(say) if isinstance(n, ast.If)))
+
+    # ---------------------------------------- 无界面：窗口一帧都不许露
+    check("CoreMixin.__init__ 收 console（输出接上控制台了没）",
+          any(a.arg == "console" for a in pos)
+          and isinstance(defaults.get("console"), ast.Constant)
+          and defaults.get("console").value is False,
+          str(defaults.get("console")))
+    check("headless 由命令行请求推导（cli_request.used）",
+          _refers(init, "_headless") and _refers(init, "used"))
+    # 只认「在 if self._headless 里」那处 withdraw —— __init__ 末尾诊断模式
+    # （_bench）那处是另一回事，别混进来。
+    wd = [c for n in ast.walk(init)
+          if isinstance(n, ast.If) and _refers(n.test, "_headless")
+          for c in _calls_named(n, "self.root.withdraw")]
+    setup = _calls_named(init, "self._setup_gui")
+    check("★ 窗口赶在**建任何控件之前**就收起来（之后的随便哪个 "
+          "update_idletasks() 都会把窗口映射出去，用户就看见它闪一下）",
+          len(wd) == 1 and bool(setup)
+          and wd[0].lineno < min(c.lineno for c in setup),
+          f"headless withdraw={[c.lineno for c in wd]} "
+          f"setup={[c.lineno for c in setup]}")
+    check("无界面时不查游戏版本更新（状态栏没人看，还会在退出时挡住收工）",
+          any(isinstance(n, ast.If) and _refers(n.test, "_headless")
+              and bool(_calls_named(n, "self.auto_update_check"))
+              for n in ast.walk(init)))
+
+    post = _func_def(core, "_start_post_window_tasks")
+    post_ext = _calls_named(post, "self._load_extensions_once")
+    post_gc = _calls_named(post, "self._start_background_gc")
+    post_off = [
+        n for n in ast.walk(post)
+        if isinstance(n, ast.If) and _refers(n.test, "_headless")
+        and any(isinstance(c, ast.Return) for c in n.body)
+    ]
+    check("无界面时只留扩展载入：后台 GC 与自更新都跳过"
+          "（都排在扩展载入**之后**）",
+          bool(post_ext) and bool(post_gc) and len(post_off) == 1
+          and post_ext[0].lineno < post_off[0].lineno < post_gc[0].lineno)
+
+    preheat = _func_def(gg, "start_preheat")
+    check("★ 无界面不预热（否则预热会和 _monitor_game 里那次拼装同时啃"
+          "同一批文件，拼两遍 115 MB）",
+          _refers(preheat, "_headless"))
+    check("无界面不排「游戏运行中 mm:ss」那个每秒计时器（状态栏没人看）",
+          _refers(_func_def(gg, "_start_runtime_updater"), "_headless"))
+
+    close_after = _func_def(gg, "_close_after_game")
+    headless_close = [
+        n for n in ast.walk(close_after)
+        if isinstance(n, ast.If) and _refers(n.test, "_headless")
+        and _refers(n, "on_closing")   # self.run_on_gui(self.on_closing)
+    ]
+    cfg_line = [n.lineno for n in ast.walk(close_after)
+                if isinstance(n, ast.Constant)
+                and n.value == "close_on_game_exit"]
+    check("★ 无界面时游戏退出后**一定收工**（不看 close_on_game_exit 设置）—— "
+          "那种进程没有窗口也没有托盘，用户想关都找不着地方",
+          len(headless_close) == 1 and bool(cfg_line)
+          and headless_close[0].lineno < cfg_line[0])
+
+    monitor = _func_def(gg, "_monitor_game")
+    check("启动失败：无界面时说给控制台（弹框只留给没控制台的情况）",
+          any(isinstance(n, ast.If) and _refers(n.test, "_headless")
+              and bool(_calls_named(n, "self._cli_note"))
+              for n in ast.walk(monitor)))
+    check("「已有游戏在跑」这句在无界面时也回控制台（框会弹在没人看的窗口上）",
+          any(isinstance(n, ast.If) and _refers(n.test, "_headless")
+              and bool(_calls_named(n, "self._cli_note"))
+              for n in ast.walk(launch_version)))
+    check("控制台那条路把「退出 + 备份结果」都交代了"
+          "（否则用户以为备份丢了）",
+          len(_calls_named(_func_def(gg, "_game_session"), "self._cli_say")) >= 3)
+
+    # ---------------------------------------------- 退出码（脚本里要用）
+    codes = {name: getattr(CLI, name) for name in (
+        "EXIT_OK", "EXIT_CRASH", "EXIT_BAD_USAGE", "EXIT_NO_VERSION",
+        "EXIT_LAUNCH_FAILED",
+    )}
+    check("退出码常量齐了、互不相同、0 只留给「正常」",
+          codes["EXIT_OK"] == 0 and len(set(codes.values())) == len(codes),
+          str(codes))
+    check("三条失败路径各自置了退出码（写坏 / 找不到 / 起不来）",
+          _refers(handler, "EXIT_BAD_USAGE")
+          and _refers(report, "EXIT_NO_VERSION")
+          and _refers(monitor, "EXIT_LAUNCH_FAILED"))
+    check("used：命令行开关用过了吗（决定「不建窗口」与「话说给控制台」）",
+          req(["--launch", "v146"]).used is True
+          and req(["--launch"]).used is True    # 写坏了也算用过 —— 得告诉他
+          and req([]).used is False
+          and req(["--debug"]).used is False)
+
+    # ------------------------------ 没启动起来的那几条路：必须收工
+    #
+    # ★★ 2026-10-16 真机实测抓到的洞：无界面进程没有窗口、也没有托盘，
+    #    「启动没成」时不收工就是一个用户**看不见也关不掉**的进程
+    #    （拿一个写错的版本名跑打包好的 exe：它一直挂在后台不退，见
+    #    _history/src/_probe_exe_console.py）。这一组断言把它钉死。
+    def _guarded_by_headless(node, tree) -> bool:
+        """某个调用是不是落在 ``if not self._headless:`` 的 body 里。"""
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.If)
+                    and isinstance(n.test, ast.UnaryOp)
+                    and isinstance(n.test.op, ast.Not)
+                    and _refers(n.test, "_headless")
+                    and n.lineno <= node.lineno <= (n.end_lineno or n.lineno)):
+                return True
+        return False
+
+    finish = _func_def(gg, "_cli_finish")
+    # ⚠️ 这里查的是**引用**不是调用：``self.run_on_gui(self.on_closing)`` 里
+    #    on_closing 是当参数传出去的，写成 `_calls_named(..., "self.on_closing")`
+    #    会恒假（那个坑踩过一次）。同理 deiconify 也是传引用。
+    finish_guard = [n for n in ast.walk(finish)
+                    if isinstance(n, ast.If) and _refers(n.test, "_headless")]
+    finish_close = [n for n in ast.walk(finish)
+                    if isinstance(n, ast.Attribute) and n.attr == "on_closing"]
+    check("★ 有个统一出口「这次没启动起来 ⇒ 收工」（_cli_finish）："
+          "先定退出码，**只有无界面**才自己收工",
+          bool(finish) and _refers(finish, "exit_code")
+          and bool(finish_guard) and bool(finish_close)
+          and isinstance(finish_guard[0].test, ast.UnaryOp)   # if not self._headless
+          and finish_guard[0].lineno < finish_close[0].lineno)
+    quit_sites = [
+        n for n in ast.walk(gg)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute) and n.func.attr == "_cli_note"
+        and any(k.arg == "quit_code" for k in n.keywords)
+    ]
+    quit_codes = {
+        k.value.attr for n in quit_sites for k in n.keywords
+        if k.arg == "quit_code" and isinstance(k.value, ast.Attribute)
+    }
+    check("★ 每条「没起来」的路都带上了 quit_code"
+          "（参数写坏 / 找不到版本 / 拉不起来 / 已有游戏在跑）",
+          len(quit_sites) >= 4, f"{len(quit_sites)} 处")
+    check("……而且带的码与各自的失败原因对得上",
+          quit_codes == {"EXIT_BAD_USAGE", "EXIT_NO_VERSION",
+                         "EXIT_LAUNCH_FAILED"},
+          str(sorted(quit_codes)))
+
+    note = _func_def(gg, "_cli_note")
+    tell = [n for n in ast.walk(note)
+            if isinstance(n, ast.FunctionDef) and n.name == "tell"]
+    check("★ 没控制台时：**先让用户看见提示框，再收工**"
+          "（反了就等于没提示 —— 框还没出来进程就没了）",
+          len(tell) == 1
+          and bool(_calls_named(tell[0], "box"))
+          and bool(_calls_named(tell[0], "self._cli_finish"))
+          and _calls_named(tell[0], "box")[0].lineno
+          < _calls_named(tell[0], "self._cli_finish")[0].lineno)
+
+    # ⚠️ deiconify 也是**传引用**（`self.run_on_gui(self.root.deiconify)`），
+    #    所以按 Attribute 找、不按 Call 找。
+    deic = [n for n in ast.walk(monitor)
+            if isinstance(n, ast.Attribute) and n.attr == "deiconify"]
+    check("★ 无界面时 _monitor_game 的收尾（放开按钮 / deiconify）一句都不做"
+          "—— 启动失败时更不许把窗口放出来（那是零界面底线的正面违背）",
+          bool(deic) and all(_guarded_by_headless(d, monitor) for d in deic),
+          f"{len(deic)} 处 deiconify")
+
+    # ------------------------------------------- 控制台模块（可单独看门）
+    con_tree = ast.parse(
+        (ROOT / "launcher" / "console.py").read_text(encoding="utf-8"))
+    con_imports: set[str] = set()
+    for n in ast.walk(con_tree):
+        if isinstance(n, ast.Import):
+            con_imports.update(a.name for a in n.names)
+        elif isinstance(n, ast.ImportFrom):
+            con_imports.add(n.module or "")
+    check("控制台模块只 import 标准库",
+          con_imports <= {"codecs", "logging", "sys", "threading", "ctypes"},
+          str(sorted(con_imports)))
+    check("★ 绝不 AllocConsole（那会新建一个黑框 —— 要的是**附到父进程**的"
+          "控制台；没有父控制台就安静地返回 False）",
+          not _refers(con_tree, "AllocConsole")
+          and _refers(con_tree, "AttachConsole"))
+    main_fn = _func_def(entry, "main")
+    check("入口：命令行用法才去接控制台（双击那条路不动进程的 std 流）",
+          len(_calls_named(main_fn, "console.attach")) == 1
+          and _refers(main_fn, "used"))
+    check("入口把 console 传给界面，并把退出码交给系统（sys.exit(main())）",
+          any(k.arg == "console" for k in ctor[0].keywords)
+          and _refers(main_fn, "exit_code")
+          and bool(_calls_named(entry, "sys.exit")))
+    check("没接上控制台时 say() 是空操作（不会因为没人听就炸）",
+          CONSOLE.attached() is False)
+    CONSOLE.say("回归自查：这句不该出现在任何地方")
+    import codecs as _codecs
+    try:
+        enc_ok = bool(_codecs.lookup(CONSOLE._console_encoding()))
+    except Exception:                                          # noqa: BLE001
+        enc_ok = False
+    check("输出编码按控制台当前代码页选（中文控制台 936，按 UTF-8 写是乱码）",
+          enc_ok, CONSOLE._console_encoding())
+
+    # -------------------------------------- 收尾标记（「结束了」的信号）
+    #
+    # ★ 2026-10-17 用户实测报「卡住了」：翻 launcher.log 其实两个会话都正常
+    #   收工了（各有一行「启动器已关闭」），屏幕上看着像没退 —— 因为 cmd 对
+    #   窗口子系统程序**不等待**：提示符敲完命令立刻就回来（还排在程序输出
+    #   的**前面**），程序真正退出时屏幕**什么都不会变**。所以收尾必须在
+    #   控制台打一行「启动器已退出（退出码 N）」当结束信号，否则用户分不清
+    #   「结束了」和「还挂着」。
+    bye_assign = [
+        n for n in ast.walk(main_fn)
+        if isinstance(n, ast.Assign) and len(n.targets) == 1
+        and isinstance(n.targets[0], ast.Name)
+        and isinstance(n.value, ast.Call) and _callee(n.value) == "t"
+        and n.value.args and isinstance(n.value.args[0], ast.Constant)
+        and n.value.args[0].value == "cli.console_bye"
+    ]
+    bye_says = [
+        n for n in ast.walk(main_fn)
+        if isinstance(n, ast.Call) and _callee(n) == "console.say"
+        and n.args and isinstance(n.args[0], ast.Name)
+        and bye_assign and n.args[0].id == bye_assign[0].targets[0].id
+    ]
+    bye_mainloop = [n for n in ast.walk(main_fn)
+                    if isinstance(n, ast.Call)
+                    and _callee(n) == "app.root.mainloop"]
+    check("★ 收工前在控制台打「启动器已退出（退出码 N）」—— 有且只有一处"
+          "（cmd 不等窗口程序，这一行就是用户等的那声『结束了』）",
+          len(bye_assign) == 1 and len(bye_says) == 1,
+          f"赋值 {len(bye_assign)} 处，say {len(bye_says)} 处")
+    check("……且排在 mainloop 返回**之后**（游戏退出收工那条路也走这一行）",
+          bool(bye_mainloop) and bool(bye_assign)
+          and bye_assign[0].lineno > bye_mainloop[0].lineno,
+          f"bye={[c.lineno for c in bye_assign]} "
+          f"mainloop={[c.lineno for c in bye_mainloop]}")
+    code_stores = [n for n in ast.walk(main_fn)
+                   if isinstance(n, ast.Name) and n.id == "code"
+                   and isinstance(n.ctx, ast.Store)]
+    check("★ ……退出码走变量、成功与崩溃两条路各自赋值"
+          "（写死数字的话崩溃那条路就把码丢了）",
+          len(code_stores) >= 2
+          and any(k.arg == "code" and isinstance(k.value, ast.Name)
+                  and k.value.id == "code"
+                  for c in bye_assign for k in c.value.keywords),
+          f"code 赋值 {len(code_stores)} 处")
+    bye_text = {}
+    for _lang in ("zh_CN", "en_US"):
+        _pack = json.loads(
+            (ROOT / "lang" / f"{_lang}.json").read_text(encoding="utf-8"))
+        bye_text[_lang] = _pack.get("cli.console_bye")
+    check("★ cli.console_bye 中英文都在、都带 {code} 占位符"
+          "（缺了任何一个，用户看到的是 key 原文、或者没有退出码）",
+          all(v and "{code}" in v for v in bye_text.values()), str(bye_text))
+
+    cli_tree = ast.parse((ROOT / "launcher" / "cli.py").read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for n in ast.walk(cli_tree):
+        if isinstance(n, ast.Import):
+            imported.update(a.name for a in n.names)
+        elif isinstance(n, ast.ImportFrom):
+            imported.add(n.module or "")
+    check("参数模块只 import 标准库（不 import 包内模块 ⇒ 谁都能安全 import）",
+          imported <= {"__future__", "dataclasses", "typing"},
+          str(sorted(imported)))
+
+
+# ------------- 24. 打包检查那张「手写的符号表」和源码一致吗 -------------
+def test_packed_required_table():
+    """`packed_code_check.py` 的 `REQUIRED` 是一张**手写的**表：模块 → 符号。
+
+    它只在**打包之后**才跑得起来（要解 exe 里的 PYZ），所以这张表一旦和源码
+    脱节，代价是「部署完才发现」——而且两种脱节都很难看：
+
+    * **新模块没进表**：那个模块在打包产物里完全没有守门（2026-10-07 漏过
+      `gui_backup` / `gui_profiles`、2026-10-16 漏过 `cli`，同一个坑两次）；
+    * **符号被删/改名但表里还留着**：打包检查**永远红**，逼着人把整条发版
+      流程停在最后一步去查「明明代码是对的」。
+
+    这里在**源码**一侧把它钉住（不 import 那个脚本 —— 它一执行就去找 exe）。
+    """
+    print("\n[24] 打包检查的符号表 vs 源码")
+    tool = ROOT / "_tools" / "verify" / "packed_code_check.py"
+    tree = ast.parse(tool.read_text(encoding="utf-8"))
+    table = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "REQUIRED" for t in node.targets
+        ):
+            table = ast.literal_eval(node.value)
+    if table is None:
+        check("能找到 packed_code_check 的 REQUIRED 表", False, str(tool))
+        return
+    check("能找到 packed_code_check 的 REQUIRED 表", isinstance(table, dict),
+          f"{len(table)} 个模块")
+
+    # ① 表里的模块名都是真的（打错一个字母 = 打包检查报「整个模块不在包里」）
+    bogus = []
+    for module in table:
+        p = ROOT / (module.replace(".", "/") + ".py")
+        if not p.is_file():
+            bogus.append(module)
+    check("表里的每个模块在源码里都存在（模块名没打错）", not bogus, str(bogus))
+
+    # ② launcher/ 下每个模块都必须进表 —— 这就是踩过两次的那个坑
+    have = {m.split(".", 1)[1] for m in table if m.startswith("launcher.")}
+    files = {p.stem for p in (ROOT / "launcher").glob("*.py")}
+    check("★ launcher/ 下的每个模块都进了表（漏一个 = 那个模块完全没守门）",
+          not (files - have - {"__init__"}), str(sorted(files - have - {"__init__"})))
+
+    # ③ 表里钉的符号在源码里真的存在（删掉/改名一个被钉住的符号时，
+    #    不许等到打包之后才发现）
+    def names_of(code) -> set[str]:
+        """和 packed_code_check 同一套收集口径：递归收 co_names。"""
+        out: set[str] = set()
+        stack = [code]
+        while stack:
+            c = stack.pop()
+            out.update(c.co_names)
+            stack.extend(k for k in c.co_consts if hasattr(k, "co_names"))
+        return out
+
+    missing: list[str] = []
+    for module, syms in table.items():
+        p = ROOT / (module.replace(".", "/") + ".py")
+        if not p.is_file():
+            continue
+        names = names_of(compile(p.read_text(encoding="utf-8"), str(p), "exec"))
+        gone = [s for s in syms if s not in names]
+        if gone:
+            missing.append(f"{module}: {gone}")
+    check("★ 表里钉的每个符号在源码里都还在（源码一侧先红，别拖到打包后）",
+          not missing, str(missing))
+
+    # ④ 反向对照：故意喂一个不存在的符号，上面那套必须报出来
+    fake = {"launcher.cli": ["CliRequest", "这个符号不可能存在"]}
+    p = ROOT / "launcher" / "cli.py"
+    names = names_of(compile(p.read_text(encoding="utf-8"), str(p), "exec"))
+    check("反向对照：喂一个不存在的符号会被报出来（否则第 ③ 条等于没查）",
+          [s for s in fake["launcher.cli"] if s not in names] == ["这个符号不可能存在"])
 
 
 if __name__ == "__main__":

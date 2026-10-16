@@ -410,5 +410,19 @@
   "args.java_unknown_output": "Unrecognized output (does not look like java -version): {head}",
   "args.java_not_in_env": "No java.exe found in JAVA_HOME or PATH",
   "args.java_from_source": "{text} (from {source})",
-  "args.java_env_all_dead": "Every java found via environment variables failed to start (it may have been uninstalled)"
+  "args.java_env_all_dead": "Every java found via environment variables failed to start (it may have been uninstalled)",
+  "cli.selected": "Requested on the command line: {name}",
+  "cli.bad_usage": "The “{flag}” argument needs a version name after it, so nothing was launched.\n\nFor example:\n    Mindustry启动器.exe {flag} \"Mindustry v146\"\n\nThe version name is the line shown in the main window's version list.",
+  "cli.not_found": "No version named “{name}” was found, so nothing was launched.\n\nAvailable versions:\n{versions}",
+  "cli.not_found_status": "❌ The version “{name}” given on the command line was not found; nothing was launched",
+  "cli.more_versions": "…and {count} more (see “Manage versions” for the full list)",
+  "cli.ambiguous": "“{name}” matches more than one version, so nothing was launched.\n\nUse the full name (type + version number):\n{candidates}",
+
+  "cli.console_start": "Launching “{name}” (save profile “{profile}”)…",
+  "cli.console_started": "Game started in {seconds:.1f}s. The launcher stays in the background; it will back up and exit after you quit the game.",
+  "cli.console_closed": "Game exited (played for {minutes:.1f} minutes).",
+  "cli.console_backup": "Automatic backup done (save profile “{profile}”).",
+  "cli.console_backup_failed": "Automatic backup failed: {err}",
+  "cli.console_no_backup": "No automatic backup this time (auto backup is off for this profile, or the playtime threshold was not reached).",
+  "cli.console_bye": "Launcher exited (exit code {code})."
 }

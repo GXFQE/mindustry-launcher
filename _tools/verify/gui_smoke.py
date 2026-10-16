@@ -1376,6 +1376,263 @@ def main() -> int:
             win.destroy()
             app.root.update()
 
+        print("\n[5c] 命令行 --launch：不露窗口、直接把游戏拉起来、输出走控制台")
+        # 参数解析与版本匹配是纯函数（回归脚本 [23] 里逐条钉过），这里只验
+        # **接线与形态**：真窗口下选中项对不对、是不是**立刻**去启动、找不到
+        # 时只说不动手、接上控制台时**一个框都不弹**。启动本身换成记录 ——
+        # 冒烟不许真起游戏。
+        import launcher.cli as CLI
+        import launcher.gui_game as GG
+        # gui_game 有自己的 messagebox 引用（和 gui_main 那份不是一回事），
+        # 这一节会走到它的弹窗路径 —— 一起换成假件，否则测试卡在等点击上。
+        GG.messagebox = fake_mb
+
+        real_versions = app._current_versions()
+        fake_versions = [
+            {"name": "SMOKE v1", "type": "SMOKE", "raw_version": "v1"},
+            {"name": "SMOKE v2", "type": "SMOKE", "raw_version": "v2"},
+        ]
+        # 让预热这一路能在假清单上跑完（不碰真实数据，也不真拼 jar）
+        def fake_build(vtype, version, out):
+            Path(out).write_bytes(b"smoke")
+            return out
+
+        app.version_manager.manifest_digest = lambda t, v: f"smoke-{t}-{v}"
+        app.version_manager.build_runtime_jar = fake_build
+        app._apply_versions(fake_versions)
+
+        launched: list[tuple] = []
+        real_launch_version = app._launch_version
+        app._launch_version = (
+            lambda version, *, confirm: launched.append((version, confirm))
+        )
+
+        # ★ 「没启动成功就收工」：无界面进程没有窗口、也没有托盘 —— 不收工
+        #   就是一个用户**看不见也关不掉**的进程（2026-10-16 真机实测抓到的：
+        #   版本名写错时 exe 会一直挂在后台不退）。这里把 on_closing 换成
+        #   记录件：既验了「有没有收工」，又不会把测试的主窗口真关掉 ——
+        #   后面几节还要用它。
+        quits: list[str] = []
+        real_close = app.on_closing
+        app.on_closing = lambda: quits.append("quit")
+        # 这几节模拟的是**命令行无界面**那条路：真实运行里 `--launch` 一定
+        # 带 `_headless=True`（由 cli_request.used 推出来），「收工」这件事
+        # 正是只在那时候发生。不置上的话 `_cli_finish` 会按「有界面」那条路
+        # 直接 return，断言就成了在测一个真实中不存在的组合。
+        real_headless = app._headless
+        app._headless = True
+
+        # --- 1) 命中：选中 + **立刻**启动（无界面不预热，也就没什么好等的）---
+        fake_mb.calls.clear()
+        app.cli_request = CLI.CliRequest(launch="SMOKE v2")
+        app._handle_cli_launch()
+        check("命令行指定的版本被选中（不是列表第一项）",
+              app.version_listbox.curselection() == (1,),
+              str(app.version_listbox.curselection()))
+        check("★ 立刻就走启动实现（无界面不再排那 1.2 秒的定时器），"
+              "且 confirm=False 跳过确认框",
+              launched == [(fake_versions[1], False)], str(launched))
+        pump(app, 0.2)
+        check("状态栏说明这是命令行指定的",
+              "SMOKE v2" in app.status_var.get(), app.status_var.get())
+
+        # --- 2) 找不到：一个都不启动，把可用的列出来（然后收工）---
+        fake_mb.calls.clear()
+        launched.clear()
+        quits.clear()
+        app.cli_request = CLI.CliRequest(launch="SMOKE")
+        app._handle_cli_launch()
+        pump(app, 0.3)
+        check("找不到时一个都不启动（连前缀也不算命中）", launched == [],
+              str(launched))
+        warned = [m for k, _, m in fake_mb.calls if k == "showwarning"]
+        check("没接上控制台才弹窗：说清找不到哪个版本、并列出可用的",
+              bool(warned) and "SMOKE" in warned[0]
+              and "SMOKE v1" in warned[0],
+              str(warned[:1])[:160])
+        check("……并把退出码置成「没有这个版本」（脚本里 %ERRORLEVEL% 要用）",
+              app.exit_code == CLI.EXIT_NO_VERSION, str(app.exit_code))
+        check("状态栏留了「没有启动」的记号",
+              "SMOKE" in app.status_var.get(), app.status_var.get())
+        check("★ 没找到版本时**收工退出**"
+              "（无界面进程没有窗口也没有托盘，留着它用户关不掉）",
+              len(quits) == 1, str(quits))
+
+        # --- 3) 参数写坏（--launch 后面没跟值）：提示用法，不启动 ---
+        fake_mb.calls.clear()
+        launched.clear()
+        quits.clear()
+        app.cli_request = CLI.CliRequest(bad_usage=True)
+        app._handle_cli_launch()
+        pump(app, 0.3)
+        warned = [m for k, _, m in fake_mb.calls if k == "showwarning"]
+        check("写坏时提示用法（带上 --launch 这个名字）",
+              bool(warned) and "--launch" in warned[0], str(warned[:1])[:160])
+        check("写坏时也不启动，退出码是「参数写坏」",
+              launched == [] and app.exit_code == CLI.EXIT_BAD_USAGE,
+              f"{launched} exit={app.exit_code}")
+        check("……写坏了也收工（同上：不许留下看不见的进程）",
+              len(quits) == 1, str(quits))
+
+        # --- 4) 接上控制台：话写控制台，**一个框都不弹** ---
+        # 用户是在控制台敲的命令，结果就该回那个控制台（见 launcher/console.py）。
+        # 真实模块没接上控制台时 say() 是空操作（打包前就是这样），所以这里
+        # 换一个记录用的假件，验的是「有没有走控制台这条出口」。
+        fake_mb.calls.clear()
+        launched.clear()
+        quits.clear()
+        said: list[str] = []
+
+        class FakeConsole:
+            @staticmethod
+            def say(text: str = "") -> None:
+                said.append(text)
+
+        real_console = GG.console
+        GG.console = FakeConsole
+        app._cli_console = True
+        try:
+            app.cli_request = CLI.CliRequest(launch="SMOKE v2")
+            app._handle_cli_launch()
+            pump(app, 0.3)
+            check("★ 有控制台时**零弹框**（一个框都不许弹）",
+                  fake_mb.calls == [], str(fake_mb.calls[:2]))
+            check("……启动前先报一句「正在启动…」（带上版本名与分类）",
+                  any("SMOKE v2" in s for s in said), str(said[:2])[:160])
+            said.clear()
+            app.cli_request = CLI.CliRequest(launch="不存在的版本")
+            app._handle_cli_launch()
+            pump(app, 0.3)
+            check("找不到时也只在控制台说（列了可用版本），照样不弹框",
+                  fake_mb.calls == [] and any("SMOKE v1" in s for s in said),
+                  f"框={fake_mb.calls[:1]} 控制台={str(said[:1])[:160]}")
+            check("★ ……控制台这条路上失败也是「说完就收工」",
+                  len(quits) == 1, str(quits))
+        finally:
+            GG.console = real_console
+            app._cli_console = False
+
+        # --- 5) 无界面不预热（否则会和启动时那次拼装同时啃同一批文件）---
+        if app._preheat_after_id is not None:
+            app.root.after_cancel(app._preheat_after_id)
+            app._preheat_after_id = None
+        was_headless = app._headless
+        app._headless = True
+        try:
+            app.start_preheat()
+            check("★ 无界面时 start_preheat 什么也不排"
+                  "（省掉多拼一遍 115 MB 的 jar）",
+                  app._preheat_after_id is None, str(app._preheat_after_id))
+        finally:
+            app._headless = was_headless        # 本节一律按无界面跑，还回去
+
+        # --- 6) 真按「命令行用法」构造一个：窗口从头就是收起的 ---
+        # 前面几条验的是接线，这一条验的是**底线本身**：--launch 构造出来的
+        # 窗口一帧都不许露（用户要的是直接进游戏，不是看启动器）。
+        app2 = None
+        fake_mb.calls.clear()
+        try:
+            app2 = MindustryLauncher(
+                cli_request=CLI.CliRequest(launch="__smoke_missing__")
+            )
+            # 这个实例的 on_closing 也换成记录件：它**自己**会收工（下面要断言
+            # 这件事），而真让它关掉的话，窗口一销毁，后面的断言就没得查了。
+            app2_closed: list[str] = []
+            app2_real_close = app2.on_closing
+            app2.on_closing = lambda: app2_closed.append("quit")
+            check("★ --launch 构造出来的窗口是收起的（state=withdrawn）",
+                  app2.root.state() == "withdrawn", app2.root.state())
+            pump(app2, 0.4)
+            check("……跑起来之后也没被映射出去（winfo_ismapped=0）",
+                  app2.root.winfo_ismapped() == 0,
+                  str(app2.root.winfo_ismapped()))
+            check("……那个版本不存在 ⇒ 退出码记下来了、也没启动任何东西",
+                  app2.exit_code == CLI.EXIT_NO_VERSION, str(app2.exit_code))
+            check("★ ……而且它**自己收工了**（不留后台进程、也不等人来点）",
+                  app2_closed == ["quit"], str(app2_closed))
+            check("……收工时窗口仍然是收起的（全程一帧都没露）",
+                  app2.root.state() == "withdrawn"
+                  and app2.root.winfo_ismapped() == 0,
+                  f"state={app2.root.state()}")
+        finally:
+            if app2 is not None:
+                app2.on_closing = app2_real_close     # 换回真的才关得掉
+                app2.on_closing()
+
+        # --- 7) 无界面 + **启动失败**：窗口一样一帧都不许露 ---
+        # 真机实测抓到过这条路上的洞：启动失败时那两句收尾（放开按钮 /
+        # deiconify）原来是**无条件**排队的 —— 结果是「启动没成，反而把
+        # 窗口给你放出来」。这里让它真的炸一次（拼装抛异常），看窗口露不露。
+        said.clear()
+        quits.clear()
+        real_build = app.version_manager.build_runtime_jar
+        real_take = app._take_preheated_jar
+        GG.console = FakeConsole
+        app._cli_console = True
+        app._headless = True
+        # 窗口先收起来（模拟无界面那条路的起点），再让它失败 ——
+        # 要验的就是「它别被放出来」。
+        app.root.withdraw()
+        # ★ 这一节要跑**真实现**：前面几节把 _launch_version 换成了记录件
+        #   （只为验接线：谁在什么时机被调用）。不撤掉的话这里调到的是一句
+        #   空 lambda —— 什么都不会发生，「窗口没被放出来」就会因为「什么都
+        #   没做」而**假通过**（本节第一次跑出来就是这么骗人的）。
+        if "_launch_version" in app.__dict__:
+            del app._launch_version
+
+        boomed: list[str] = []
+
+        def boom(*a, **k):
+            boomed.append("boom")
+            raise RuntimeError("smoke 模拟拼装失败")
+
+        app.version_manager.build_runtime_jar = boom
+        # ★ 别让预热 jar 把这次失败绕过去：有现成的预热结果时压根不会调
+        #   build_runtime_jar，于是「拼装失败」根本不会发生 —— 这一节就会
+        #   变成在真起游戏（冒烟里最不该发生的事）。
+        app._take_preheated_jar = lambda key, wait=False: None
+        try:
+            app._launch_version(fake_versions[0], confirm=False)
+            pump(app, 1.5)
+            # 金丝雀：先钉住「这一节真的踩到了拼装失败」，后面几条才有意义。
+            # 本节第一次跑就是这么被骗过去的 —— 调到的是一句空 lambda，
+            # 于是所有「没露窗口 / 没留下进程」的断言都因为「什么都没做」而
+            # 全绿，看着比真通过还整齐。凡是否定式断言，都得先有一个肯定式
+            # 的事实垫底。
+            check("……先确认这一节真的走到了拼装失败那条路（不是什么都没做）",
+                  boomed == ["boom"], str(boomed))
+            check("★ 无界面 + 启动失败：窗口没有被放出来"
+                  "（一句 deiconify 都不许做）",
+                  app.root.state() == "withdrawn"
+                  and app.root.winfo_ismapped() == 0,
+                  f"state={app.root.state()} mapped={app.root.winfo_ismapped()}")
+            check("……失败原因说给了控制台（不弹框、也不闷声不响）",
+                  any("smoke 模拟拼装失败" in s for s in said),
+                  str(said[:2])[:160])
+            check("……退出码是「版本找到了但没拉起来」",
+                  app.exit_code == CLI.EXIT_LAUNCH_FAILED, str(app.exit_code))
+            check("★ ……并且收工了（失败也不许留下看不见的进程）",
+                  len(quits) == 1, str(quits))
+        finally:
+            GG.console = real_console
+            app._cli_console = False
+            app.version_manager.build_runtime_jar = real_build
+            app._take_preheated_jar = real_take
+            app.root.deiconify()          # 把窗口还给后面的小节
+            app.root.update()
+
+        # 复原：假版本、假启动都撤掉，别留给后面的小节
+        app._apply_versions(real_versions)
+        if "_launch_version" in app.__dict__:   # 第 7 节可能已经先撤掉了
+            del app._launch_version
+        del app.version_manager.manifest_digest
+        del app.version_manager.build_runtime_jar
+        app.on_closing = real_close
+        app._headless = real_headless
+        app.cli_request = None
+        app.exit_code = 0
+        app.root.update()
+
         print("\n[6] 关闭")
         app._close_log_window()
         app.root.update()

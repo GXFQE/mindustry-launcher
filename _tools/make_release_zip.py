@@ -384,6 +384,9 @@ the "ENGLISH" line further down.
   窗口一打开，它就会在后台提前把当前选中版本的游戏文件拼好。
   等你点 "启动游戏" 时直接复用，能省掉几秒等待。
 
+· 命令行直接启动
+  在控制台里加个参数就直奔某个版本（见下面那节），全程不出现启动器窗口。
+
 · 启动器自己会更新
   有新版本时，它会在后台悄悄下好，等你下次关掉启动器自动换上 ——
   不用再手动下载解压。只下**这一版真正变了的那几个文件**（通常就是
@@ -391,6 +394,39 @@ the "ENGLISH" line further down.
   一个字节都不会动，自己换过的 jre 也不会被覆盖。
   想改成「只提示、由我自己决定」，或者彻底关掉，去 "设置" 里改
   "启动器更新"（默认是自动）。
+
+
+【从命令行直接启动某个版本】
+
+在控制台里（cmd、PowerShell、Windows 终端都行）加上参数，就直接进那个版本，
+全程不出现启动器窗口 —— 屏幕上只会看到游戏：
+
+    "Mindustry启动器.exe" --launch "Mindustry v146"
+
+版本名就是主界面列表里显示的那一行（Mindustry v146、BE v146 这样）；
+只写版本号（v146）也行 —— 前提是它只属于一个类型，撞名会告诉你要写全名。
+
+进度和结果都写在你敲命令的那个控制台里：正在启动哪个版本、起来了（带耗时）、
+游戏退出（带玩了多久）、这一局有没有自动备份。
+
+游戏退出后它自己就结束了，不用管设置里那个「游戏退出后自动关闭启动器」——
+这种形态既没有窗口也没有托盘，留着它没人关得掉。退出前的自动备份照常按
+当时分类的设置执行。
+
+跑完时，控制台最后一行是「启动器已退出（退出码 N）」—— 这行就是「结束了」的
+信号（cmd 对窗口程序不等待：命令敲下去，提示符立刻就回来了，还会排在程序输出
+的前面；所以结束时不会有新提示符冒出来，以这行为准）。想要「命令跑完才回到
+提示符」的手感：放进 .bat 里跑（脚本模式下 cmd 会等），或在命令前加 start /wait。
+
+名字写错、或者参数只写了一半（--launch 后面没跟名字）时什么都不会启动：
+控制台里说清楚原因（写错时把可用的版本列出来），屏幕上不会多出任何窗口。
+
+退出码有意义，脚本里可以直接判断：0 正常（游戏玩完退出也算 0）、1 启动器崩了、
+2 参数写坏、3 没有这个版本、4 版本找到了但没拉起来。
+（--launch=<版本> 这种写法也认。）
+
+也可以给快捷方式加这个参数（双击即进游戏）。那种情况没有控制台可写，所以出
+问题时会退回成弹窗提示 —— 在控制台里敲，提示就都在控制台里。
 
 
 【设置里能改什么】
@@ -591,6 +627,10 @@ MAIN FEATURES
   version's game files in the background. When you click Launch it reuses
   that work, saving a few seconds.
 
+- Launch from the command line
+  One argument in a console goes straight into a version (see the section
+  below), with no launcher window at all.
+
 - The launcher updates itself
   When a new version is out it downloads quietly in the background and swaps
   itself in the next time you close it -- no manual download and extraction.
@@ -599,6 +639,48 @@ MAIN FEATURES
   backups and settings are not touched, and a jre you replaced yourself is
   left alone. Prefer to be asked first, or to turn it off entirely? Change
   "启动器更新" (Launcher update) in Settings (default: automatic).
+
+
+LAUNCHING A VERSION FROM THE COMMAND LINE
+
+Pass an argument from a console (cmd, PowerShell, Windows Terminal) and it goes
+straight into that version. The launcher window never appears -- all you see is
+the game:
+
+    "Mindustry启动器.exe" --launch "Mindustry v146"
+
+The version name is the line shown in the main window's list (Mindustry v146,
+BE v146, ...). Just the version number (v146) works too -- as long as only one
+type has it; if several do, it asks you to spell out the full name instead.
+
+Progress and results are written to the console you typed the command in: which
+version is starting, that it came up (with the time it took), that the game
+exited (with how long you played), and whether this session was backed up.
+
+When the game exits the launcher exits on its own -- the "close the launcher
+after the game exits" setting does not apply here, because this form has neither
+a window nor a tray icon, so there would be no way to close it. The automatic
+backup still runs, under the rules of the profile you were playing in.
+
+When it finishes, the last line in the console is "Launcher exited (exit code N)"
+-- that line is the "finished" signal (cmd does NOT wait for windowed programs:
+the prompt comes back the moment you press Enter, before the program output; no
+new prompt appears when it finishes -- trust the last line). Prefer the
+"prompt-returns-only-when-done" feel? Put the command in a .bat (cmd waits in
+scripts), or prefix it with start /wait.
+
+A wrong name, or a --launch with no name after it, launches nothing: the console
+explains why (listing your versions when the name was wrong) and no extra window
+appears.
+
+Exit codes are meaningful, so scripts can branch on them: 0 success (quitting
+the game after playing counts as success), 1 the launcher crashed, 2 bad command
+line, 3 no such version, 4 the version was found but would not start.
+(--launch=<name> works too.)
+
+A shortcut can carry the argument as well (double-click and play). There is no
+console to write to in that case, so problems fall back to a dialog box -- run
+it from a console and every message stays in that console.
 
 
 WHAT YOU CAN CHANGE IN SETTINGS

@@ -10,6 +10,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
 
+from . import cli, console
 from .config import DEFAULT_PROFILE_NAME, default_data_dir
 from .gamecmd import build_java_command, split_args
 from .gamelog import GameLog, salvage_last_log
@@ -93,8 +94,14 @@ class GameMixin:
         return not self._preheat_idle.is_set()
 
     def start_preheat(self, delay_ms: int = 0) -> None:
-        """去抖地安排一次预热。启动完成、列表选择变化、版本列表刷新都会调它。"""
-        if self.stop_event.is_set() or self._bench:
+        """去抖地安排一次预热。启动完成、列表选择变化、版本列表刷新都会调它。
+
+        ★ 命令行无界面（``--launch``）时**不预热**：那条路没人翻列表，选中
+          之后立刻就启动 —— 预热只会跟 ``_monitor_game`` 里那次拼装**同时**
+          去啃同一批文件（拼一次 115 MB），拼两遍比不预热还慢。整条路只留
+          ``_take_preheated_jar`` 那一侧：有现成的就复用，没有就自己拼。
+        """
+        if self.stop_event.is_set() or self._bench or self._headless:
             return
         if self._preheat_after_id is not None:
             self.root.after_cancel(self._preheat_after_id)
@@ -240,18 +247,44 @@ class GameMixin:
             logger.debug(f"[预热] 清掉 {removed} 个残留的临时 jar")
 
     def launch_game(self) -> None:
-        if self._game_is_running():
-            messagebox.showwarning(t("common.warning"), t("game.already_running"))
-            return
+        """「启动游戏」按钮：启动列表里选中的版本（弹确认框）。"""
         sel = self.version_listbox.curselection()
         if not sel:
             messagebox.showwarning(t("common.warning"), t("game.select_version"))
             return
         versions = self._current_versions()
-        version = versions[sel[0]]
+        if sel[0] >= len(versions):
+            # 列表与缓存不同步（正常不该发生）：宁可不启动，也别拿错版本 ——
+            # 版本决定往哪套存档目录里写，拿错比不启动坏得多。
+            logger.warning("版本列表与缓存不同步，已忽略这次启动")
+            return
+        self._launch_version(versions[sel[0]], confirm=True)
+
+    def _launch_version(self, version: dict, *, confirm: bool) -> None:
+        """启动**指定**的版本 —— 全项目唯一的一处启动实现。
+
+        ``confirm=False`` 只有一条来路：命令行的 ``--launch``（见
+        ``_handle_cli_launch``）。用户已经在命令行上点名了，再弹一次
+        「确认启动？」等于让他确认自己刚敲过的东西；其余流程**一样** ——
+        进程监控、退出后自动备份、收尾，一个都不少（无界面那条路会跳过
+        预热，见 ``start_preheat``）。
+        """
+        if self._game_is_running():
+            # 无界面时这句要回到控制台：框弹在一个没人看的窗口上，用户
+            # 只会以为「命令没反应」。既然这一局没起来，就顺带收工 ——
+            # 留下来同样是个看不见、关不掉的进程（见 _cli_finish）。
+            if self._headless:
+                self._cli_note(
+                    t("game.already_running"), quit_code=cli.EXIT_LAUNCH_FAILED
+                )
+            else:
+                messagebox.showwarning(
+                    t("common.warning"), t("game.already_running")
+                )
+            return
         profile = self.config.get_current_profile()
         save_path = self.config.get_current_save_path()
-        if not messagebox.askyesno(
+        if confirm and not messagebox.askyesno(
             t("game.confirm_title"),
             t(
                 "game.confirm_body",
@@ -278,10 +311,167 @@ class GameMixin:
             # 否则「正在启动」永远亮着，后台 GC 会被永久挡在门外。
             logger.warning(f"无法开始启动游戏（线程池已关闭）: {e}")
             self._launching.clear()
+            self.exit_code = cli.EXIT_LAUNCH_FAILED
             self.set_status(t("game.launch_failed", err=e))
-            self.run_on_gui(lambda: self.launch_btn.config(state=tk.NORMAL))
-            if self.config.get("hide_on_launch"):
-                self.run_on_gui(self.root.deiconify)
+            if self._headless:
+                # 无界面：说给控制台，别去动窗口（它本来就是收起的）；
+                # 没起来就别留着了，说完收工
+                self._cli_note(t("game.launch_error", err=e), error=True,
+                               quit_code=cli.EXIT_LAUNCH_FAILED)
+            else:
+                self.run_on_gui(
+                    lambda: self.launch_btn.config(state=tk.NORMAL)
+                )
+                if self.config.get("hide_on_launch"):
+                    self.run_on_gui(self.root.deiconify)
+
+    # ------------------------------------------------------ 命令行（--launch）
+    #
+    # 目标：跑一条命令（或者双击一个带了这条参数的快捷方式），**直接进某个
+    # 版本的游戏** —— 全程不出现启动器窗口（窗口在建出来那一刻就收起了，
+    # 见 CoreMixin.__init__），进度与结果写回**敲命令的那个控制台**
+    # （见 launcher/console.py）。做法上刻意**不另起一条启动路径** —— 只把
+    # 选中挪到命令行指的那个版本，然后复用 _launch_version（监控、退出后
+    # 备份、收尾全都接在后面）。参数解析与版本匹配是纯函数，在 cli.py 里。
+
+    def _cli_say(self, text: str) -> None:
+        """命令行用法的**状态**一句话：接上控制台就写过去。
+
+        没接上就只进日志 —— 这不该弹框（游戏马上就要起来了，没什么要问的）。
+        """
+        if self._cli_console:
+            console.say(text)
+
+    def _cli_finish(self, code: int) -> None:
+        """命令行那条路**这次什么也没启动起来**：定下退出码，然后收工。
+
+        ★ 为什么必须收工：无界面进程没有窗口、也没有托盘图标 —— 不收工就是
+          一个用户**看不见也关不掉**的进程。真机实测抓到过这件事：版本名写错
+          时 exe 会一直挂在后台（2026-10-16，见 `_history/src/_probe_exe_console.py`，
+          那一版 `--launch` 只有「游戏起来之后」才收工）。
+        """
+        self.exit_code = code
+        if not self._headless:
+            return      # 有界面那条路窗口还在，关不关由用户（理论上到不了这儿）
+        logger.info(f"命令行这次没启动任何东西，直接收工（退出码 {code}）")
+        self.run_on_gui(self.on_closing)
+
+    def _cli_note(
+        self, text: str, *, error: bool = False, quit_code: int | None = None
+    ) -> None:
+        """命令行用法的**提示**（多半是失败）：有控制台写控制台，没有才弹框。
+
+        没有控制台只可能是「双击快捷方式」（在控制台敲的那条路一定接得上），
+        那时**没有任何别的渠道** —— 静默失败比弹一个框更糟：用户只会以为
+        命令没反应。弹框要回到 GUI 线程（本方法会从工作线程被调到）。
+
+        ``quit_code`` 给了 = 「说完这句就收工」（见 ``_cli_finish``）：**没启动
+        成功**的每条路都得带上它。弹框那条路是**等用户点掉再收工**的 ——
+        否则提示框还没看清，进程就没了。
+        """
+        if self._cli_console:
+            console.say(text)
+            if quit_code is not None:
+                self._cli_finish(quit_code)
+            return
+        title = t("common.error") if error else t("common.warning")
+        box = messagebox.showerror if error else messagebox.showwarning
+
+        def tell() -> None:
+            box(title, text)
+            if quit_code is not None:
+                self._cli_finish(quit_code)
+
+        self.run_on_gui(tell)
+
+    def _select_version_row(self, version: dict) -> bool:
+        """把列表选中挪到 ``version`` 那一行（并滚到可见）。找不到返回 False。
+
+        ★ ``selection_set()`` **不会**触发 ``<<ListboxSelect>>``（那个事件只在
+        用户交互时发），所以平时由 ``_on_version_selected`` 顺手带起来的
+        两件事（放开按钮、让预热换版本）要由调用方自己补 —— 这里只管选中。
+        """
+        versions = self._current_versions()
+        try:
+            index = versions.index(version)
+        except ValueError:                                      # pragma: no cover
+            return False
+        self.version_listbox.selection_clear(0, tk.END)
+        self.version_listbox.selection_set(index)
+        self.version_listbox.see(index)
+        return True
+
+    def _handle_cli_launch(self) -> None:
+        """处理 ``--launch <版本>``：选中它，然后**直接**启动。
+
+        由 ``CoreMixin.__init__`` 丢进 GUI 队列、排在 ``refresh_versions()``
+        的界面部分**之后**执行（见那里的注释：顺序反了选中会被覆盖）。选不中
+        （没这个版本 / 版本号撞名）就**什么都不启动**，把可用的版本列出来。
+
+        ★ 这里是「选中 → 启动」一步到位的：不再排那 1.2 秒的定时器 ——
+          那是给「开窗、让用户看见选中了谁、等预热拼完」那条路准备的，
+          而无界面模式既不预热（见 ``start_preheat``）也不会有人看窗口
+          （2026-10-16 改）。
+        """
+        req = self.cli_request
+        if req is None or self._bench:
+            return
+        if req.bad_usage:
+            logger.warning(f"命令行参数 {cli.LAUNCH_FLAG} 后面没有版本名，未启动")
+            self._cli_note(
+                t("cli.bad_usage", flag=cli.LAUNCH_FLAG),
+                quit_code=cli.EXIT_BAD_USAGE,
+            )
+            return
+        if not req.launch:
+            return
+        versions = self._current_versions()
+        hit, candidates = cli.match_version(versions, req.launch)
+        if hit is None or not self._select_version_row(hit):
+            self._cli_report_missing(req.launch, versions, candidates)
+            return
+        # 选中 ≠ 用户点了它，所以按钮那一侧要自己补（正常路径上这事由
+        # <<ListboxSelect>> 触发，见 _on_version_selected）。
+        self.launch_btn.config(state=tk.NORMAL)
+        self.set_status(t("cli.selected", name=hit["name"]))
+        self._cli_say(
+            t(
+                "cli.console_start",
+                name=hit["name"],
+                profile=self.config.get_current_profile(),
+            )
+        )
+        logger.info(f"命令行指定启动版本「{hit['name']}」，直接开始")
+        self._launch_version(hit, confirm=False)
+
+    def _cli_report_missing(
+        self, query: str, versions: list[dict], candidates: list[str]
+    ) -> None:
+        """``--launch`` 没匹配上：说清楚 + 状态栏留一句 + 记日志。
+
+        两种情形分开说：「版本号撞名」要告诉用户写成哪一个全名；「根本没这个
+        版本」要把可用的列出来（多半是敲错了一个字符）。
+        """
+        if candidates:
+            logger.warning(
+                f"命令行指定的版本「{query}」对应多个版本，未启动：{candidates}"
+            )
+            text = t("cli.ambiguous", name=query,
+                     candidates="\n".join(candidates))
+        else:
+            names, more = cli.available_names(versions)
+            logger.warning(
+                f"命令行指定的版本「{query}」不存在，未启动；"
+                f"可用（列出 {len(names)} 个）：{names}（另有 {more} 个未列出）"
+            )
+            listing = "\n".join(names) if names else t("game.no_versions")
+            if more:
+                listing += "\n" + t("cli.more_versions", count=more)
+            text = t("cli.not_found", name=query, versions=listing)
+        self.set_status(t("cli.not_found_status", name=query))
+        # 「版本名写错了」是**输入问题**，不是程序出错 —— 弹框按警告来
+        # （和 GUI 里那句「已有游戏正在运行」一个口径）。
+        self._cli_note(text, quit_code=cli.EXIT_NO_VERSION)
 
     def _monitor_game(self, version_info: dict) -> None:
         """拼好运行时 jar 并把游戏拉起来；拉起来之后交给 `_game_session`。
@@ -432,10 +622,16 @@ class GameMixin:
                     exc_info=True,
                 )
             mark("拉起进程")               # i18n: keep（计时标签）
+            total_ms = sum(v for _, v in timings)
             logger.info(
                 "[启动耗时] "
                 + " | ".join(f"{k} {v:.0f}ms" for k, v in timings)
-                + f" | 合计 {sum(v for _, v in timings):.0f}ms"
+                + f" | 合计 {total_ms:.0f}ms"
+            )
+            # 无界面时把「起来了」写回控制台（有界面时是空操作）——
+            # 从敲下命令到游戏窗口出现之间有五六秒，得有个交代。
+            self._cli_say(
+                t("cli.console_started", seconds=total_ms / 1000)
             )
             # jar 拼好了、JVM 也起来了，磁盘空出来了，GC 可以干活了。
             self._launching.clear()
@@ -450,11 +646,19 @@ class GameMixin:
         except Exception as e:
             logger.error(f"游戏启动异常: {e}", exc_info=True)
             self.set_status(t("game.error", err=e))
-            self.run_on_gui(
-                lambda e=e: messagebox.showerror(
-                    t("common.error"), t("game.launch_error", err=e)
+            self.exit_code = cli.EXIT_LAUNCH_FAILED
+            if self._headless:
+                # 无界面：错误也说给控制台（接不上控制台才退化成弹框）。
+                # 游戏没起来 ⇒ 这条进程没有留在后台的理由了，收工走人
+                # （否则它就一直挂着，用户看不见也关不掉）。
+                self._cli_note(t("game.launch_error", err=e), error=True,
+                               quit_code=cli.EXIT_LAUNCH_FAILED)
+            else:
+                self.run_on_gui(
+                    lambda e=e: messagebox.showerror(
+                        t("common.error"), t("game.launch_error", err=e)
+                    )
                 )
-            )
             # 没拉起来：这次启动留下的东西由这里收干净（拉起来了的话
             # 全部交给 _game_session，它才是那个知道游戏什么时候结束的人）
             if own_jar and temp_jar is not None and temp_jar.exists():
@@ -462,8 +666,15 @@ class GameMixin:
             with self._proc_lock:
                 self.current_process = None
                 self.game_start_time = None
-            self.run_on_gui(lambda: self.launch_btn.config(state=tk.NORMAL))
-            self.run_on_gui(self.root.deiconify)
+            # ★ 这两句是**有界面**那条路的收尾（把按钮放开、窗口放出来）。
+            #   无界面时一句都不能做：`deiconify()` 会把窗口放出来，那就违背了
+            #   「--launch 全程不出现启动器窗口」这个底线 —— 而且偏偏是在
+            #   **启动失败**的时候露一下脸，最容易让人以为「它自己打开了」。
+            if not self._headless:
+                self.run_on_gui(
+                    lambda: self.launch_btn.config(state=tk.NORMAL)
+                )
+                self.run_on_gui(self.root.deiconify)
         finally:
             # 无论成功还是异常，都要把「正在启动」的牌子摘掉，
             # 否则 GC 会被永久挡在门外。
@@ -512,6 +723,7 @@ class GameMixin:
             logger.info(
                 f"游戏 {version_info['name']} 退出，运行 {playtime:.1f} 分钟"
             )
+            self._cli_say(t("cli.console_closed", minutes=playtime))
             if self.stop_event.is_set():
                 # 启动器已经在关了：这时候再起一次备份只会跟退出流程抢磁盘
                 logger.debug("启动器正在退出，跳过自动备份")
@@ -529,9 +741,17 @@ class GameMixin:
                     self.set_status(
                         t("game.backup_done", profile=profile_name)
                     )
+                    self._cli_say(t("cli.console_backup", profile=profile_name))
                 except Exception as e:
                     logger.error(f"自动备份失败: {e}")
                     self.set_status(t("game.backup_failed", err=e))
+                    self._cli_say(
+                        t("cli.console_backup_failed", err=e)
+                    )
+            else:
+                # 「怎么没备份？」—— 控制台那条路上得交代一句，否则用户会以为
+                # 丢了。有界面时这句是空操作（状态栏里有更详细的说法）。
+                self._cli_say(t("cli.console_no_backup"))
         except Exception as e:
             logger.error(f"游戏会话异常: {e}", exc_info=True)
         finally:
@@ -586,9 +806,20 @@ class GameMixin:
         * 启动器本来就在退出流程里（用户已经点了关闭）—— 那就别再关一次；
         * 有版本包正在下载 —— 这会儿关会把下载打断（半截文件留在 versions/），
           留着窗口让下载跑完，顺便在状态栏说一句「为什么没关」。
+
+        ★ 命令行无界面（``--launch``）时**一定收工**，不看设置也不管下载：
+          那种进程的全部意义就是「把这一局拉起来 + 退出后备份」，游戏都退出
+          了它就没用了 —— 而它**没有窗口、没有托盘**，用户想关都找不着地方。
+          （无界面模式也不启动任何下载，见 ``CoreMixin.__init__`` 与
+          ``_start_post_window_tasks``，所以「打断下载」在这里不会发生。）
         """
         if self.stop_event.is_set():
             return False
+        if self._headless:
+            logger.info("命令行无界面启动：游戏已退出，启动器收工")
+            self.set_status(t("game.exiting"))
+            self.run_on_gui(self.on_closing)
+            return True
         if not self.config.get("close_on_game_exit"):
             return False
         if self.update_manager.downloading.is_set():
@@ -603,6 +834,10 @@ class GameMixin:
         return True
 
     def _start_runtime_updater(self) -> None:
+        if self._headless:
+            # 无界面：状态栏没人看，每秒醒一次的计时器纯属浪费
+            return
+
         def update() -> None:
             with self._proc_lock:
                 proc = self.current_process

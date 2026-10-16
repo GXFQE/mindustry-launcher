@@ -410,5 +410,19 @@
   "args.java_unknown_output": "输出看不懂（不像 java -version）：{head}",
   "args.java_not_in_env": "JAVA_HOME 和 PATH 里都没有找到 java.exe",
   "args.java_from_source": "{source} 里的 {text}",
-  "args.java_env_all_dead": "环境变量里找到的 java 都起不来（可能已被卸载）"
+  "args.java_env_all_dead": "环境变量里找到的 java 都起不来（可能已被卸载）",
+  "cli.selected": "命令行指定启动「{name}」",
+  "cli.bad_usage": "命令行参数「{flag}」后面要跟一个版本名，所以没有启动。\n\n例如：\n    Mindustry启动器.exe {flag} \"Mindustry v146\"\n\n版本名就是主界面列表里显示的那一行。",
+  "cli.not_found": "找不到版本「{name}」，所以没有启动。\n\n可用的版本：\n{versions}",
+  "cli.not_found_status": "❌ 命令行指定的版本「{name}」不存在，没有启动",
+  "cli.more_versions": "……以及另外 {count} 个（完整的列表在「管理版本」里看）",
+  "cli.ambiguous": "「{name}」对应多个版本，所以没有启动。\n\n请把名字写全（类型 + 版本号）：\n{candidates}",
+
+  "cli.console_start": "正在启动「{name}」（存档分类「{profile}」）…",
+  "cli.console_started": "游戏已启动（{seconds:.1f} 秒）。启动器留在后台，游戏退出后会自动备份并退出。",
+  "cli.console_closed": "游戏已退出（运行 {minutes:.1f} 分钟）。",
+  "cli.console_backup": "自动备份完成（存档分类「{profile}」）。",
+  "cli.console_backup_failed": "自动备份失败：{err}",
+  "cli.console_no_backup": "这次没有自动备份（当前分类没开「自动备份」，或者游玩时间没到门槛）。",
+  "cli.console_bye": "启动器已退出（退出码 {code}）。"
 }

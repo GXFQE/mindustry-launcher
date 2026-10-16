@@ -14,6 +14,7 @@ from tkinter import ttk
 from typing import Any
 
 from . import gamecmd
+from .cli import CliRequest, EXIT_OK
 from .config import ConfigManager
 from .extensions import ExtensionRegistry
 from .gamelog import GameLog
@@ -28,9 +29,32 @@ logger = logging.getLogger(__name__)
 
 
 class CoreMixin:
-    def __init__(self) -> None:
+    def __init__(
+        self, cli_request: CliRequest | None = None, console: bool = False
+    ) -> None:
+        """``cli_request`` = 命令行解析结果（见 launcher/cli.py）。
+
+        默认 None 就是**双击启动**那条路（和以前完全一样）；带了
+        ``--launch <版本>`` 时才不同 —— 见 ``_handle_cli_launch``。
+
+        ``console`` = 输出接上控制台了吗（由入口调 ``console.attach()``
+        得到，见 ``MindustryLauncher.main``）。只有命令行用法才可能是
+        True —— 它决定「提示走控制台还是弹框」，见 ``_cli_note``。
+        """
         self.base_dir = BASE_DIR
         self.config_file = self.base_dir / "config.json"
+        # 命令行请求（--launch）。纯数据、不碰界面，所以谁都可以提前读它。
+        self.cli_request = cli_request
+        # ★ 命令行用法（``--launch``，哪怕参数写坏了）：**不露窗口**。
+        #   用户要的是「直接进游戏」，不是看着启动器 —— 所以窗口建出来
+        #   之后马上收起（见下面 tk.Tk() 那一段），全程不再显示。
+        self._headless = bool(cli_request and cli_request.used)
+        # 输出接上控制台了没（入口那边接的）。接上了 ⇒ 一切提示写控制台，
+        # 一个框都不弹；没接上（双击快捷方式、或参数来自脚本）才退化成弹框。
+        self._cli_console = bool(console)
+        # 进程退出码（命令行用法下 ``%ERRORLEVEL%`` 就是它，见 cli.EXIT_*）。
+        # 双击启动那条路永远是 0。
+        self.exit_code = EXIT_OK
         logger.info(
             f"{APP_NAME} {__version__} 启动，数据根 {self.base_dir}"
         )
@@ -132,12 +156,33 @@ class CoreMixin:
         # 与 selfupdate）。None = 这次没有要应用的更新。
         self.self_update_plan: str | None = None
         self.root = tk.Tk()
+        # ★ 命令行用法（--launch）：**一帧都不许露**。必须赶在建任何控件之前
+        #   收起来 —— 之后随便哪个 update_idletasks() 都可能把窗口映射出去，
+        #   而那时用户已经看见它闪了一下（他要的是直接进游戏，不是看窗口）。
+        if self._headless:
+            self.root.withdraw()
         self.font = ("Microsoft YaHei", 10)
         self.gui_queue = queue.Queue()
         self._setup_gui()
         self._process_gui_queue()
         self.refresh_versions()
-        if self.config.get("auto_update") and not self._bench:
+        # 命令行要求「直接启动某个版本」（--launch）时在这里接上。
+        #
+        # ★ 必须**丢进 GUI 队列**，不能直接调：refresh_versions() 的界面部分是
+        #   排队做的（run_on_gui → _apply_versions），此刻列表还是空的 ——
+        #   直接调用会把选中设到一个不存在的下标上（Tk 静默忽略），随后
+        #   _apply_versions 一灌列表又把它选回第 0 项：界面高亮的是 A、预热
+        #   和启动的却是 B。丢进同一条 FIFO 队列，顺序天然是「先灌列表、
+        #   再处理命令行」（2026-10-16 端到端跑出来的）。
+        self.run_on_gui(self._handle_cli_launch)
+        if (
+            self.config.get("auto_update")
+            and not self._bench
+            and not self._headless
+        ):
+            # 无界面时**不查游戏版本**：状态栏没人看，自动下载还会在游戏
+            # 退出时挡住收工（见 _close_after_game 里那条「还有下载在进行」）。
+            # 用户下次正常打开启动器时照样会查。
             self.auto_update_check()
         logger.info(
             f"启动器初始化完成，当前存档分类「"
@@ -330,6 +375,10 @@ class CoreMixin:
     def _start_post_window_tasks(self) -> None:
         """窗口已经能用之后才做的可选工作（扩展载入 → 后台 GC → 自更新检查）。
 
+        ★ 命令行无界面（``--launch``）时**只留扩展载入**：那种进程只在
+          「游戏还在跑」这期间存在，做完就退，后台维护纯属添乱 —— 理由见
+          下面那两行注释。
+
         ★ 单独一个入口，而不是把这些塞进 ``_start_background_gc``：
           那个方法只该管「GC 要不要让路」，它的行为被回归测试逐条断言着
           （让路延时、恢复提交、二次确认）。扩展和自更新属于另外的事，
@@ -341,6 +390,12 @@ class CoreMixin:
         if self.stop_event.is_set():
             return
         self._load_extensions_once()
+        if self._headless:
+            # 命令行无界面：只干「把这一局游戏拉起来」这一件事。后台 GC 会
+            # 跟拼 JAR 抢盘（那是这套流程里最吃磁盘的一步）；自动检查自己
+            # 有没有新版既没人看状态栏，又会在退出时多一件要收尾的事。
+            # ★ 扩展照常载入 —— on_game_exited 那类钩子跟界面没关系。
+            return
         self._start_background_gc()
         # 自更新最后跑：查一次远端、有必要就下到暂存区。真正的替换要等
         # 退出时（见 gui_updates._apply_staged_update）。

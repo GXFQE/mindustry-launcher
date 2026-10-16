@@ -45,6 +45,8 @@ launcher/               All source code
     updates.py          Update checking and downloading (the game itself)
     selfupdate.py       ★ Launcher self-update (check → download slim package → swap files on exit)
     gamecmd.py          Launch-argument parsing + command-line assembly
+    cli.py              The launcher's own command-line arguments (--launch: start a version directly)
+    console.py          Talking to "the console you typed the command in" (attach to the parent console + encode per code page)
     gamelog.py          Game output capture (to disk + in-memory buffer + pipe-encoding fallback)
     gui_core.py         GUI core: thread queue, status bar, window skeleton
     gui_*.py            Feature pages (main / launch / versions / profiles / backups / log / settings)
@@ -61,9 +63,9 @@ LICENSE                 Full GNU GPL-3.0 text
 ## Development workflow
 
 ```bash
-python _tools/verify/code_regression.py          # 1. Run after any code change (448 checks)
+python _tools/verify/code_regression.py          # 1. Run after any code change (520 checks)
 python _tools/verify/i18n_check.py               # 1b. After touching strings/features: language-pack and "no hardcoded strings" gate (35 checks)
-python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (138 checks, no game launched)
+python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (164 checks, no game launched)
 python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/languages: really build windows and switch language (29 checks)
 python _tools/verify/selfupdate_check.py         # 3. After touching self-update: offline check/swap/rollback run (92 checks)
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ Clear build output before packaging
@@ -174,8 +176,8 @@ to disable extensions entirely.
 ## UI language internals
 
 UI strings live in `lang/*.json`; the code only contains keys
-(`t("settings.save_return")`). As of 2026-10-05 **every module (21 source files) has been
-migrated — 355 keys** — and the gate is a hard line: hardcoding one more UI string fails
+(`t("settings.save_return")`). As of 2026-10-05 **every module has been migrated**
+(now 27 source files, 410 keys), and the gate is a hard line: hardcoding one more UI string fails
 `i18n_check.py` on the spot.
 
 - **`zh_CN.json` is the reference pack**: add new strings there first, then fill in other

@@ -61,6 +61,18 @@ REQUIRED = {
         "GameLog", "game_log", "list2cmdline", "PIPE",
         # 2026-09-18 追加：游戏退出后按设置关掉启动器（备份做完才关）
         "_close_after_game", "downloading",
+        # 2026-10-16 追加：命令行直接启动指定版本。启动实现只此一份
+        # （_launch_version，confirm 决定要不要先问一句），命令行这条路
+        # 只是把选中挪过去、然后调它。少了这些名字 = exe 还是
+        # 「命令行参数被当没看见」的旧版本 —— 而双击照常能用，发现不了。
+        "_launch_version", "_select_version_row", "_handle_cli_launch",
+        "_cli_report_missing", "cli",
+        # 2026-10-16 追加（当天第二版）：那条路改成**零界面**了 —— 窗口全程
+        # 收起、进度与结果写回控制台、失败才退化成弹框、退出码有意义。
+        # ⚠️ 这一版**删掉了** _cli_auto_launch 与 _CLI_LAUNCH_DELAY_MS
+        #    （不再有「开窗 → 等 1.2 秒 → 自动启动」那段），所以那两个名字
+        #    从这里撤了 —— 留在表里会让检查永远红。
+        "_cli_say", "_cli_note", "_headless", "_cli_console", "console",
     ],
     "launcher.gui_core": [
         "preheat_busy",            # GC 让路条件里用到了它
@@ -86,6 +98,15 @@ REQUIRED = {
         # 2026-10-05：界面语言。两页的文案在建控件那一刻就取好了，换语言只能
         # 整体重建 —— 所以 _build_pages 必须和 rebuild_for_language 一起在包里。
         "t", "apply_setting", "_build_pages", "rebuild_for_language",
+        # 2026-10-16 追加：命令行请求从 __init__ 传进来，并且**必须入队**
+        # （run_on_gui → _handle_cli_launch，排在 _apply_versions 之后 ——
+        # 直接调用时列表还是空的，选中会被静默丢掉，见 REF §十八）。
+        "CliRequest", "cli_request", "_handle_cli_launch",
+        # 2026-10-16 追加（当天第二版）：零界面形态的两个标志（_headless 由
+        # cli_request.used 推导、console 由入口的 attach() 结果传进来）、
+        # 退出码（入口 return app.exit_code）、以及**必须早于建控件**的那句
+        # withdraw —— 它要是掉到 _setup_gui 之后，用户会看见窗口闪一下。
+        "_headless", "_cli_console", "exit_code", "withdraw",
     ],
     # 2026-09-18 新增两个模块。不在包里 = exe 还是旧逻辑（读 Mindustry.json、
     # 把游戏输出扔掉），而这种退化只看「能打开」是发现不了的。
@@ -351,6 +372,31 @@ REQUIRED = {
         "_on_profile_selected",
         "default_data_dir", "delete_path", "dir_summary", "roaming_dir",
         "sanitize_profile_name",
+    ],
+    # 2026-10-16 新增：启动器**自己**的命令行参数（`--launch <版本>`）。
+    # ★ 又是上面那条「覆盖面自己也会漏」：新模块不主动加进来，它就完全没有
+    #   守门。而且漏了格外隐蔽 —— 入口那句接线（parse_cli + cli_request=）
+    #   落在入口脚本里、不在这份检查的可视范围（由 code_regression 的 AST
+    #   断言钉），于是「解析/匹配规则本身在不在包里」只剩这里能查。
+    "launcher.cli": [
+        "CliRequest", "LAUNCH_FLAG",
+        # 「可用版本」列出来时的上限（弹窗不把整个版本列表糊上去）
+        "AVAILABLE_LIMIT",
+        # 解析：认 `--launch X` 与 `--launch=X`，不认识的参数一律忽略
+        "parse_cli",
+        # 匹配：显示名精确 → 原始版本号精确；**撞名不猜**、不做前缀匹配
+        "match_version", "available_names",
+    ],
+    # 2026-10-16 新增：把话说给「敲命令的那个控制台」。★ 打包成**窗口子系统**
+    # 之后这个进程天生没有控制台（sys.stdout 是 None，print 被 Python 直接
+    # 丢掉、还不报错），所以「接上父进程控制台」这件事只能在 exe 里验 ——
+    # 源码里跑（有控制台）永远是好的，看不出这一层没了。
+    "launcher.console": [
+        "ATTACH_PARENT_PROCESS", "CONOUT",
+        # 接上/判断/说话。say 在没接上时是空操作（调用方据此退化成弹框）
+        "attach", "attached", "say", "_console_encoding",
+        # 接上以后那个流与它的锁（多线程都会说话，不加锁会绞在一起）
+        "_stream",
     ],
 }
 

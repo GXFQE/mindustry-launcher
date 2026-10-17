@@ -148,6 +148,9 @@ REQUIRED = {
         # 2026-09-22：版本来源改成注册表（不再把仓库地址写在 updates 里）、
         # 清单格式版本独立于程序版本
         "SourceRegistry", "MANIFEST_VERSION", "sources",
+        # 2026-10-17：版本库的**唯一**打开方式。界面和命令行（--list）共用它 ——
+        # 少了它，`--list` 在包里就退化成「自己另拼一份路径」或者直接 ImportError。
+        "open_version_manager",
     ],
     "launcher.gui_updates": ["cleanup_preheat", "_close_log_window"],
     # 日志分流（2026-09-16）：源码/测试写 launcher.dev.log，exe 才写 launcher.log。
@@ -380,12 +383,52 @@ REQUIRED = {
     #   断言钉），于是「解析/匹配规则本身在不在包里」只剩这里能查。
     "launcher.cli": [
         "CliRequest", "LAUNCH_FLAG",
+        # 2026-10-17：--list / --help —— 纯输出、不建窗口的两个开关。
+        # ★ 它们和 --launch 一条链上的东西不共享：少了这两个常量，
+        #   `--list` 会退化成「不认识的参数」→ 反手打开界面（最坏的那种失败：
+        #   用户以为敲错了，其实是被当成双击）。
+        "LIST_FLAG", "HELP_FLAG", "info_only",
+        # 2026-10-17 下午：--export / --export-backup / --list-backups / --out
+        # ★ 少一个常量的症状和上面一样 —— 那个开关变成「不认识的参数」，
+        #   于是 `--export` 反手打开界面（而它本该连 Tk 都不建）。
+        "EXPORT_FLAG", "EXPORT_BACKUP_FLAG", "LIST_BACKUPS_FLAG", "OUT_FLAG",
+        "export_only", "EXIT_EXPORT_FAILED",
         # 「可用版本」列出来时的上限（弹窗不把整个版本列表糊上去）
         "AVAILABLE_LIMIT",
         # 解析：认 `--launch X` 与 `--launch=X`，不认识的参数一律忽略
         "parse_cli",
         # 匹配：显示名精确 → 原始版本号精确；**撞名不猜**、不做前缀匹配
         "match_version", "available_names",
+    ],
+    # 2026-10-17 新增：`--list` / `--help` 的**全部实现**。★ 它们在 exe 里的
+    # 位置格外要紧：入口必须在 `import tkinter` 之前分派（见 code_regression
+    # 的 AST 断言），所以这两个开关的代码路径和 gui 一点关系都没有 ——
+    # 打包时漏掉这个模块，症状是「--help 没反应，反而弹出启动器界面」。
+    "launcher.cli_info": [
+        # 帮助里「本程序怎么敲」：打包后是 exe 名，源码跑是 python + 脚本名
+        "command_name",
+        # 读版本列表（走 storage.open_version_manager，和界面同一个库）
+        "collect_versions",
+        # 三种输出
+        "render_list", "render_help", "render_backups",
+        # 入口 + 两条出口（控制台 / 没控制台时的弹框退化路）
+        # ★ 2026-10-17：`_say` / `_show_in_box` 改成了公开的 `say` /
+        #   `show_in_box`（cli_export 也要用同一个出口）；符号表跟着改，
+        #   否则打包后才会在「导出」那条路上炸。
+        "run", "say", "show_in_box", "report_bad_usage",
+        # 失败时的退出码（读配置/清单都可能出意外）
+        "EXIT_CRASH", "EXIT_BAD_USAGE",
+    ],
+    # 2026-10-17 新增：`--export` / `--export-backup` 的全部实现。
+    # ★ 这条路上一个 Tk 对象都不建（入口在 import tkinter 之前就分派走了）。
+    "launcher.cli_export": [
+        "run",
+        # 两条导出路：版本 → jar、备份 → zip
+        "_export_version", "_export_backup",
+        # 输出路径：同名加序号（绝不覆盖）、分类名防越界、文件名清洗
+        "resolve_output", "safe_filename", "_resolve_profile",
+        "version_filename",
+        "EXIT_EXPORT_FAILED", "EXIT_NO_VERSION",
     ],
     # 2026-10-16 新增：把话说给「敲命令的那个控制台」。★ 打包成**窗口子系统**
     # 之后这个进程天生没有控制台（sys.stdout 是 None，print 被 Python 直接

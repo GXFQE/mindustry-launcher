@@ -91,6 +91,8 @@ os.environ["MDT_LANG"] = "zh_CN"
 
 import launcher.storage as S  # noqa: E402
 from launcher import cli as CLI  # noqa: E402
+from launcher import cli_export as CLI_EXPORT  # noqa: E402
+from launcher import cli_info as CLI_INFO  # noqa: E402
 from launcher import console as CONSOLE  # noqa: E402
 from launcher.gui_core import CoreMixin  # noqa: E402
 from launcher.gui_game import GameMixin  # noqa: E402
@@ -210,6 +212,34 @@ def test_error_handling():
     except FileNotFoundError:
         check("并行分支缺对象抛 FileNotFoundError", True, "(600 条目走并行分支)")
     check("并行分支失败后也没留半个 jar", not out2.exists())
+
+    # 压缩开关：同一个 build_runtime_jar，两条用途走两种压缩方式
+    s1 = store.store_file(b"hello " * 400)
+    s2 = store.store_file(b"world " * 400)
+    mf3 = vm.manifests_dir / "T_3.json"
+    mf3.write_text(json.dumps({
+        "type": "T", "version": "3",
+        "files": {"a.txt": s1, "b.txt": s2},
+    }))
+    raw_size = len(b"hello " * 400) * 2
+    out3 = sb / "out3.jar"
+    vm.build_runtime_jar("T", "3", out3, compression=zipfile.ZIP_DEFLATED)
+    with zipfile.ZipFile(out3) as zf:
+        check("显式给 DEFLATED 时条目确实是压缩的",
+              all(i.compress_type == zipfile.ZIP_DEFLATED for i in zf.infolist()))
+        check("压缩后内容仍逐字节可读",
+              zf.read("a.txt") == b"hello " * 400
+              and zf.read("b.txt") == b"world " * 400)
+    check("压缩后确实变小了", out3.stat().st_size < raw_size,
+          f"{out3.stat().st_size} vs {raw_size}")
+
+    out4 = sb / "out4.jar"
+    vm.build_runtime_jar("T", "3", out4)
+    with zipfile.ZipFile(out4) as zf:
+        check("★ 不传 compression 时仍是不压缩（启动那份不能被拖慢）",
+              all(i.compress_type == zipfile.ZIP_STORED for i in zf.infolist()))
+    check("（对照）不压缩那份确实比压缩的大", out4.stat().st_size > out3.stat().st_size,
+          f"{out4.stat().st_size} vs {out3.stat().st_size}")
 
 
 # ---------------------------------------------------------------- 3. GC 让路
@@ -2263,6 +2293,34 @@ def _calls_named(node, dotted):
     ]
 
 
+def _kw_arg_is(node, kw, expr):
+    """node 子树里有没有 ``kw=<expr>`` 这种关键字参数（expr 按源码文本比）。
+
+    ★ 用来钉「同一个函数、两种用途走不同参数」：``build_runtime_jar`` 的
+      ``compression=`` 必须由调用方明确给出 —— 只查「调了这个函数」是不够的，
+      导出那条路漏传参数会悄悄退化成不压缩（体积大 40%），而启动那条路
+      多传了会每次启动都多花 5 秒。两边都得看得见。
+    """
+    if node is None:
+        return False
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            for k in n.keywords:
+                if k.arg == kw and ast.unparse(k.value) == expr:
+                    return True
+    return False
+
+
+def _kw_default_of(node, name):
+    """函数的关键字专用参数 ``name`` 的默认值源码文本（没有就 None）。"""
+    if node is None:
+        return None
+    for arg, dflt in zip(node.args.kwonlyargs, node.args.kw_defaults):
+        if arg.arg == name:
+            return ast.unparse(dflt) if dflt is not None else None
+    return None
+
+
 # ---- i18n：断言查的是「中文界面文案」，代码里可能写成 t("key") ----
 #
 # 2026-10-05 接 i18n 之后，界面文案从裸中文字面量改成了 ``t("settings.reset")``。
@@ -3617,6 +3675,105 @@ def test_cli_launch_args():
     check("中间写坏一次、另一次给对了 ⇒ 按对的那个来（不为笔误罢工）",
           r.launch == "C" and not r.bad_usage, str(r))
 
+    # ---- --help / --list：纯输出开关，而且「一次只做一件事」 ----
+    r = req(["--help"])
+    check("--help：认出来、算「用了命令行」（要接控制台），且不启动任何东西",
+          r.show_help and r.info_only and r.used
+          and r.launch == "" and not r.bad_usage, str(r))
+    r = req(["--list"])
+    check("--list：认出来、算「用了命令行」，只输出不启动",
+          r.list_versions and r.info_only and r.used
+          and not r.show_help and r.launch == "", str(r))
+    r = req(["--launch", "x", "--help"])
+    check("★ --help 压过 --launch（问「怎么用」永远先回答，不许顺手把游戏拉起来）",
+          r.show_help and r.launch == "" and not r.bad_usage, str(r))
+    r = req(["--launch", "x", "--list"])
+    check("★ --list 压过 --launch（它是只读的：宁可只列清单，也别先把游戏拉起）",
+          r.list_versions and r.launch == "" and not r.bad_usage, str(r))
+    r = req(["--launch", "--list"])
+    check("--launch 缺值 + --list ⇒ 按 --list 走（不报「参数写坏了」）",
+          r.list_versions and not r.bad_usage, str(r))
+    r = req(["--list=1"])
+    check("--list=1 这种写法不认（它没有值），当成不认识的参数忽略",
+          not r.list_versions and not r.used, str(r))
+    r = req(["--apply-update", "p.json"])
+    check("更新执行体那条参数不会被误当成 --help / --list",
+          not r.info_only and not r.used, str(r))
+
+    # ---- --export / --export-backup / --list-backups：拼 jar / zip ----
+    r = req(["--export", "Mindustry v146"])
+    check("--export <名字>：取到值，且只要导出（不启动、不建窗口）",
+          r.export == "Mindustry v146" and r.export_only
+          and not r.info_only and r.launch == "", str(r))
+    r = req(["--export=BE v146", "--out", r"D:\a.jar"])
+    check("--export=<名字> + --out：等号写法与输出路径都认",
+          r.export == "BE v146" and r.out == r"D:\a.jar", str(r))
+    r = req(["--export"])
+    check("--export 缺值 ⇒ 写坏，且 bad_flag **点名是哪个开关**（提示要说对）",
+          r.bad_usage and r.bad_flag == CLI.EXPORT_FLAG and not r.export, str(r))
+    r = req(["--export-backup", "默认"])
+    check("--export-backup <分类>：取到分类，时间戳留空（= 最新那个）",
+          r.export_profile == "默认" and r.export_backup == ""
+          and r.export_only, str(r))
+    r = req(["--export-backup", "默认", "2026-09-20_16-35-32"])
+    check("--export-backup <分类> <时间戳>：两个位置参数都收下",
+          r.export_profile == "默认"
+          and r.export_backup == "2026-09-20_16-35-32", str(r))
+    r = req(["--export-backup", "默认", "--out", r"D:\x.zip"])
+    check("★ --export-backup 后面跟 --out 时**不许**把它当成时间戳吞掉",
+          r.export_profile == "默认" and r.export_backup == ""
+          and r.out == r"D:\x.zip", str(r))
+    r = req(["--export-backup"])
+    check("--export-backup 缺值 ⇒ 写坏，bad_flag 指出是它（文案要的是分类名）",
+          r.bad_usage and r.bad_flag == CLI.EXPORT_BACKUP_FLAG, str(r))
+    r = req(["--list-backups"])
+    check("--list-backups：只输出，算 info_only",
+          r.list_backups and r.info_only and r.used, str(r))
+    r = req(["--export", "v146", "--launch", "v146"])
+    check("★ --export 压过 --launch（导出不改任何状态；启动会占住存档目录）",
+          r.export == "v146" and r.launch == "", str(r))
+    r = req(["--list-backups", "--export", "v146"])
+    check("★ --list-backups 压过 --export（先看有什么，再动手）",
+          r.list_backups and not r.export, str(r))
+    r = req(["--export-backup", "默认", "2026-01-01", "--launch", "v146"])
+    check("--export-backup 压过 --launch",
+          r.export_profile == "默认" and r.launch == "", str(r))
+    r = req(["--out", r"D:\a.jar"])
+    check("--out 单独给 ⇒ 什么也不做（它只是别的开关的修饰词）",
+          not r.used, str(r))
+
+    # ---- 导出的输出路径：真在临时目录里试，绝不碰用户数据 ----
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        tgt = CLI_EXPORT.resolve_output("", "MindustryX_v146.jar")
+        check("没给 --out ⇒ 写到当前目录（「一键」就是不用想放哪）",
+              tgt.name == "MindustryX_v146.jar" and tgt.parent.is_absolute())
+        (tdp / "a.jar").write_bytes(b"x")
+        second = CLI_EXPORT.resolve_output(str(tdp) + os.sep, "a.jar")
+        check("★ 同名文件已存在 ⇒ 加 _2，**绝不覆盖**（用户的东西只增不毁）",
+              second.name == "a_2.jar", second.name)
+        (tdp / "a_2.jar").write_bytes(b"x")
+        third = CLI_EXPORT.resolve_output(str(tdp) + os.sep, "a.jar")
+        check("……再导一次是 a_3.jar（不会卡在 a_2 上互相覆盖）",
+              third.name == "a_3.jar", third.name)
+        inside = CLI_EXPORT.resolve_output(str(tdp), "b.jar")
+        check("--out 给的是已存在的目录 ⇒ 放进目录里",
+              inside.parent == tdp and inside.name == "b.jar", str(inside))
+
+    check("safe_filename 把 Windows 非法字符换成 _",
+          "/" not in CLI_EXPORT.safe_filename("旧版/归档")
+          and ":" not in CLI_EXPORT.safe_filename("a:b"))
+    check("safe_filename 空值 / 纯点号有兜底（不会拼出「.jar」这种隐藏文件）",
+          CLI_EXPORT.safe_filename("", "x") == "x"
+          and CLI_EXPORT.safe_filename("..", "x") == "x")
+    probe_base = Path(tempfile.gettempdir()) / "mdt_probe_base"
+    check("★ 分类名带 .. 时解析成 None（不许借导出读备份根之外的东西）",
+          CLI_EXPORT._resolve_profile(probe_base, "..") is None
+          and CLI_EXPORT._resolve_profile(probe_base, "../..") is None
+          and CLI_EXPORT._resolve_profile(probe_base, r"C:\Windows") is None)
+    check("……正常分类名照常解析",
+          CLI_EXPORT._resolve_profile(probe_base, "默认") is not None)
+
     # ---------------------------------------------------------- 匹配
     vs = [
         {"name": "BE v146", "raw_version": "v146"},
@@ -3667,6 +3824,151 @@ def test_cli_launch_args():
     check("--apply-update 那条分支还在（更新执行体不能被新参数挤掉）",
           bool(_calls_named(entry, "run_as_updater"))
           and _has_str(entry, "--apply-update"))
+
+    # ---- --help / --list 的分派：**位置**就是它的功能 ----
+    #
+    # 它们是纯输出，要是排在 `from launcher.gui import …` 后面，tkinter 已经
+    # 被拉起来了（一堆 DLL）；快慢是其次，那个模块在有窗口限制的环境里会直接
+    # import 失败 —— 于是「打印一段话」这种最轻的请求反而最脆。
+    main_def = _func_def(entry, "main")
+    info_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.info_only"
+    ]
+    # 导出的两条路：写坏参数（入口先拦，不许掉进界面闪一下窗口）、
+    # 以及 --export / --export-backup（拼 jar / zip，同样不需要界面）
+    bad_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.bad_usage"
+    ]
+    export_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.export_only"
+    ]
+    gui_import = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("gui")
+    ]
+    tk_import = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.ImportFrom) and (n.module or "") == "tkinter"
+    ]
+    check("入口有一条 cli_request.info_only 分支，且真的调了 cli_info.run",
+          len(info_if) == 1 and bool(_calls_named(info_if[0], "cli_info.run")),
+          f"{len(info_if)} 条")
+    check("入口有一条 cli_request.export_only 分支，且真的调了 cli_export.run",
+          len(export_if) == 1 and bool(_calls_named(export_if[0], "cli_export.run")),
+          f"{len(export_if)} 条")
+    check("★ 入口**先拦参数写坏**（--export 缺值时不许掉进界面分支去闪一下窗口）",
+          len(bad_if) == 1
+          and bool(_calls_named(bad_if[0], "cli_info.report_bad_usage")),
+          f"{len(bad_if)} 条")
+    check("……三条分支的先后顺序是 写坏 → 只输出 → 导出",
+          len(bad_if) == 1 and len(info_if) == 1 and len(export_if) == 1
+          and bad_if[0].lineno < info_if[0].lineno < export_if[0].lineno,
+          f"{bad_if[0].lineno if bad_if else '?'} / "
+          f"{info_if[0].lineno if info_if else '?'} / "
+          f"{export_if[0].lineno if export_if else '?'}")
+    # ★ 真机实测抓到的：这一分支原来是 `return cli_info.run(...)`，于是
+    #   `--list` / `--help` 输出完就没了下文 —— 跳过下面那行「启动器已退出
+    #   （退出码 N）」。用户看到的是「输出完就停住」，和 `--launch` 的收尾
+    #   约定不一致（那一行是 cmd 不等待窗口程序时唯一的「结束了」信号）。
+    #   所以：这几条分支里都不许有 return，全函数只留最后那一个。
+    branches = [b for b in (bad_if[:1] + info_if[:1] + export_if[:1])]
+    branch_returns = [
+        n for b in branches for n in ast.walk(b) if isinstance(n, ast.Return)
+    ]
+    main_returns = [n for n in ast.walk(main_def) if isinstance(n, ast.Return)]
+    check("★ 命令行那几条分支**都不许自己 return**"
+          "（会把「启动器已退出（退出码 N）」那行收尾跳过去）",
+          not branch_returns and len(main_returns) == 1,
+          f"分支里 {len(branch_returns)} 个 return，main 共 {len(main_returns)} 个")
+    check("★ 这条分支排在 import tkinter / launcher.gui **之前**"
+          "（--help / --list 这条路上一个 Tk 对象都不许建）",
+          len(info_if) == 1 and bool(gui_import) and bool(tk_import)
+          and info_if[0].lineno < min(n.lineno for n in gui_import)
+          and info_if[0].lineno < min(n.lineno for n in tk_import),
+          f"分支 L{info_if[0].lineno if info_if else '?'}"
+          f" / gui L{min((n.lineno for n in gui_import), default=0)}"
+          f" / tk L{min((n.lineno for n in tk_import), default=0)}")
+
+    info_mod = ast.parse(
+        (ROOT / "launcher" / "cli_info.py").read_text(encoding="utf-8"))
+    check("cli_info 提供 run / render_help / render_list / collect_versions",
+          all(_func_def(info_mod, name) is not None
+              for name in ("run", "render_help", "render_list",
+                           "collect_versions")))
+
+    def _imports_tk(mod):
+        for n in mod.body:
+            if isinstance(n, ast.ImportFrom):
+                if (n.module or "").startswith("tkinter"):
+                    return True
+            elif isinstance(n, ast.Import):
+                if any(a.name.startswith("tkinter") for a in n.names):
+                    return True
+        return False
+
+    check("cli_info 顶层**没有** import tkinter（它只在弹框那条退化路上才用）",
+          not _imports_tk(info_mod))
+
+    # ---- cli_export：把版本 / 备份拼成 jar / zip（同样不需要界面） ----
+    export_mod = ast.parse(
+        (ROOT / "launcher" / "cli_export.py").read_text(encoding="utf-8"))
+    check("cli_export 提供 run / _export_version / _export_backup / resolve_output",
+          all(_func_def(export_mod, n) is not None
+              for n in ("run", "_export_version", "_export_backup",
+                        "resolve_output", "safe_filename")))
+    check("cli_export 顶层**没有** import tkinter（导出一条路一个 Tk 都不建）",
+          not _imports_tk(export_mod))
+    check("--export 复用的是启动时那个 build_runtime_jar（不另写一份拼装）",
+          bool(_calls_named(_func_def(export_mod, "_export_version"),
+                            "manager.build_runtime_jar")))
+    check("★ --export-backup 走 manager.export_backup（只读 CAS），"
+          "**绝不**碰 restore_backup（那会把用户当前存档覆盖掉）",
+          bool(_calls_named(_func_def(export_mod, "_export_backup"),
+                            "manager.export_backup"))
+          and not _calls_named(export_mod, "restore_backup"))
+    check("cli_info 提供 render_backups / report_bad_usage",
+          all(_func_def(info_mod, n) is not None
+              for n in ("render_backups", "report_bad_usage")))
+    check("cli_info.run 里分派了 --list-backups",
+          _refers(_func_def(info_mod, "run"), "list_backups"))
+
+    # ---- 压缩：导出那份压、启动那份不压（同一个函数，靠参数分道） ----
+    storage_ast = ast.parse(
+        (ROOT / "launcher" / "storage.py").read_text(encoding="utf-8"))
+    check("★ 导出 jar 显式传 compression=zipfile.ZIP_DEFLATED"
+          "（117 MB → 84 MB）",
+          _kw_arg_is(_func_def(export_mod, "_export_version"),
+                     "compression", "zipfile.ZIP_DEFLATED"))
+    check("★ build_runtime_jar 的 compression 默认是 ZIP_STORED"
+          "（启动那份不许被拖慢）",
+          _kw_default_of(_func_def(storage_ast, "build_runtime_jar"),
+                         "compression") == "zipfile.ZIP_STORED")
+    check("build_runtime_jar 把 compression 透传给 _write_zip",
+          _kw_arg_is(_func_def(storage_ast, "build_runtime_jar"),
+                     "compression", "compression"))
+    check("备份导出仍走 DEFLATED（存档里全是 json/bin，压得动）",
+          _kw_arg_is(_func_def(storage_ast, "export_backup"),
+                     "compression", "zipfile.ZIP_DEFLATED"))
+
+    help_text = CLI_INFO.render_help()
+    check("--help 渲染得出来：七个开关都写进去了",
+          all(f in help_text for f in (
+              CLI.LAUNCH_FLAG, CLI.LIST_FLAG, CLI.HELP_FLAG,
+              CLI.EXPORT_FLAG, CLI.EXPORT_BACKUP_FLAG,
+              CLI.LIST_BACKUPS_FLAG, CLI.OUT_FLAG)))
+    check("--help 里写了新的退出码 5（导出失败）",
+          "5" in help_text and "导出" in help_text)
+    check("★ --help 渲染后没有残留占位符（少传参数会原样显示 {cmd} 这种怪东西）",
+          "{" not in help_text and "}" not in help_text, repr(help_text[:40]))
+    check("--list 空列表时说人话（不是空白）",
+          bool(CLI_INFO.render_list([]).strip()))
+    two = CLI_INFO.render_list(
+        [{"name": "Mindustry v146"}, {"name": "Mindustry v147"}])
+    check("--list 一行一个版本名、不截断",
+          "Mindustry v146" in two and "Mindustry v147" in two)
 
     core = ast.parse((ROOT / "launcher" / "gui_core.py").read_text(encoding="utf-8"))
     init = _func_def(core, "__init__")

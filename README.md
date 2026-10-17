@@ -40,7 +40,11 @@ Chinese in the first half, English in the second.
 - **Launch pre-warming** — the selected version's files are assembled in the background
   while the window is open, so launching is quicker.
 - **Launch from the command line** — `--launch "Mindustry v146"` in a console goes
-  straight into that version with **no launcher window at all** (see below).
+  straight into that version with **no launcher window at all**; `--list` shows your
+  versions and `--help` shows the usage (see below).
+- **Export from the command line** — `--export` packs a version into a jar you can run
+  with `java -jar`, and `--export-backup` packs a save backup into a zip;
+  `--list-backups` shows what backups you have.
 - **Log viewer** — captures the game's output so you can read it after it exits.
 
 ## Launching a version from the command line
@@ -56,6 +60,18 @@ into that version. **The launcher window never appears** — all you see is the 
   `BE v146`, ...). You can also pass just the version number (`v146`) — as long as only
   one type has it; if several do, the launcher asks you to spell out the full name
   instead of guessing.
+- Can't remember the name? List them first:
+
+  ```
+  "Mindustry启动器.exe" --list
+  ```
+
+  It prints the versions on this machine, one per line (and launches nothing). Forgot
+  how the arguments work? Run `--help`: usage, exit codes and the few gotchas are all
+  in there. Neither of them creates a window — they don't even load the UI module.
+- **One thing at a time**: if `--help`, `--list` and `--launch` are all given, only the
+  first one in that order is done (a "how do I use this" question is always answered
+  first; `--list` is read-only and comes before launching).
 - Progress and results are written to **the console you typed the command in**: which
   version is starting, that it came up (with the time it took), that the game exited
   (with how long you played), and whether this session was backed up.
@@ -74,12 +90,47 @@ into that version. **The launcher window never appears** — all you see is the 
   window appears.
 - Exit codes are meaningful, so scripts can branch on them: `0` success (quitting the
   game after playing counts as success), `1` the launcher crashed, `2` bad command line,
-  `3` no such version, `4` the version was found but would not start.
+  `3` no such version or backup, `4` the version was found but would not start,
+  `5` export failed (while packing the jar / zip).
   `--launch=<name>` works too, and the console you pressed Enter in is the one used.
 
 ★ A shortcut can carry the argument as well (double-click and play). There is no console
 to write to in that case, so problems fall back to a dialog box — run it from a console
 and every message stays in that console.
+
+## Exporting a version / a save backup
+
+Both run from a console and **never launch the game or open the launcher window**:
+
+```
+:: pack a game version into a jar -- runs with java -jar on any machine
+"Mindustry启动器.exe" --export "Mindustry v146"
+
+:: pack a save backup into a zip -- leaving the timestamp out takes the newest one
+"Mindustry启动器.exe" --export-backup 默认
+"Mindustry启动器.exe" --export-backup 默认 2026-09-20_16-35-32
+```
+
+- Not sure which backups you have? List them first:
+  ```
+  "Mindustry启动器.exe" --list-backups
+  ```
+  It groups them by profile, one line per "timestamp + note". That timestamp is exactly
+  what `--export-backup` wants (leaving it out means the newest one in that profile).
+- The file goes into the **current directory** by default, named
+  `type_version.jar` / `profile_timestamp.zip`. To put it elsewhere add `--out` (a file
+  path, or an **existing directory**):
+  ```
+  "Mindustry启动器.exe" --export "Mindustry v146" --out D:\share\
+  ```
+- **Nothing is ever overwritten**: if the name is already taken it becomes
+  `..._2.jar`, `..._3.jar`, and so on.
+- The exported jar keeps the original `Main-Class`, so `java -jar` just works; the
+  exported zip unzips straight into the contents of a save folder (copy it in and play).
+- The exported jar **is compressed**: roughly 120 MB → 87 MB for a typical version,
+  at the cost of a few extra seconds; `java -jar` and the game are unaffected.
+- Exporting is **read-only**: it never touches your current saves or your settings —
+  writing to the save folder is what "restore backup" does, not this.
 
 ## Where your data lives
 

@@ -20,7 +20,7 @@ from .extensions import ExtensionRegistry
 from .gamelog import GameLog
 from .i18n import apply_setting, t
 from .sources import load_sources
-from .storage import CASStore, BackupManager, VersionManager
+from .storage import CASStore, BackupManager, open_version_manager
 from .updates import UpdateManager
 from .utils import BASE_DIR, resource_path
 from .version import APP_NAME, __version__
@@ -79,12 +79,10 @@ class CoreMixin:
         # 「从哪儿下游戏版本」的来源表：内置那两个 + config.json 里
         # ``version_sources`` 自定义的（加来源不用改代码，见 sources.py）。
         self.sources = load_sources(self.config)
-        version_store = CASStore(self.base_dir / "versions")
-        self.version_manager = VersionManager(
-            version_store,
-            self.base_dir / "versions" / "manifests",
-            sources=self.sources,
-        )
+        # ★ 版本库的打开方式只有一处（storage.open_version_manager）：
+        #   命令行 `--list` 也要打开同一个库，两处各写一遍迟早走岔
+        #   （症状是「界面看得见、命令行看不见」，还只在命令行那条路上复现）。
+        self.version_manager = open_version_manager(self.base_dir, self.config)
         backup_store = CASStore(self.base_dir / "backups")
         self.backup_base = self.base_dir / "backups"
         self.backup_store = backup_store

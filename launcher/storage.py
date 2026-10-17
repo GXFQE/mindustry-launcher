@@ -15,7 +15,7 @@ from typing import Any
 
 from .config import ConfigManager, delete_path, sanitize_version_name
 from .i18n import t
-from .sources import SourceRegistry
+from .sources import SourceRegistry, load_sources
 from .utils import atomic_write_json, zip_directory
 from .version import MANIFEST_VERSION
 
@@ -201,6 +201,72 @@ class CASStore:
             logger.info(f"垃圾回收完成，删除 {removed} 个对象")
         return removed
 
+
+def _write_zip(
+    store: CASStore,
+    items: list[tuple[str, str]],
+    output: Path,
+    *,
+    compression: int = zipfile.ZIP_STORED,
+) -> tuple[int, float, float]:
+    """把 ``[(相对路径, sha), …]`` 拼成一个 zip，返回 ``(文件数, 读秒, 写秒)``。
+
+    ★ 版本 jar 和存档备份 zip **都走这里**：两处的「读 CAS 对象 → 写 zip」
+      完全一样，差别只有压缩方式。各写一份的话，将来优化只会改到其中一份，
+      另一份继续慢（而且没人记得去查）。
+
+    压缩方式按**用途**定，不是按内容定（同一份版本两种情况都要用）：
+
+    * **启动路径**（预热 / 启动时拼 `runtime.jar`）→ ``ZIP_STORED``。每次启动都跑，
+      115 MB 里主要开销是几千次 open/read；DEFLATE 会在这里额外加 5 s 以上，
+      而游戏侧省下的解压时间只有零点几秒。
+    * **导出给别人的那份** → ``ZIP_DEFLATED``。一次性、要传输，实测
+      117 MB → 84 MB（class/properties/so 压到 ~40%，ogg/png/msav 本来就压过、
+      只掉 0~3%），多花五秒很值。
+
+    几条不能丢的做法：
+
+    * **先并行读、再顺序写** —— 读几千个小对象的瓶颈是每次 open/read 的往返
+      （实测组装 3.1s → 1.8s）；写 zip 是共享状态，并行写要加锁，得不偿失。
+    * **分批** 是为了压内存峰值：一批最多 ``_JAR_BATCH`` 个文件在内存里，
+      而不是一次性把整个 115 MB 的 jar 全读进来。
+    * **读和写分别计时**：读受限于文件往返（也容易被杀毒软件拦），写受限于
+      zip 的 CRC 计算。混在一起就没法判断该优化哪边。
+    * **中途失败清掉半截文件再往上抛**。调用方常常只看文件在不在：拿半个 jar
+      去启动会得到莫名其妙的报错，拿半个 zip 当备份更是「以为有退路其实没有」。
+    """
+    read_s = 0.0
+    write_s = 0.0
+    try:
+        with zipfile.ZipFile(output, "w", compression) as zf:
+            if len(items) <= _JAR_BATCH:
+                for rel, sha in items:
+                    t0 = time.perf_counter()
+                    data = store.get_file(sha)
+                    t1 = time.perf_counter()
+                    zf.writestr(rel, data)
+                    t2 = time.perf_counter()
+                    read_s += t1 - t0
+                    write_s += t2 - t1
+            else:
+                with ThreadPoolExecutor(max_workers=_JAR_READ_WORKERS) as pool:
+                    for start in range(0, len(items), _JAR_BATCH):
+                        batch = items[start : start + _JAR_BATCH]
+                        shas = [sha for _, sha in batch]
+                        t0 = time.perf_counter()
+                        datas = list(pool.map(store.get_file, shas))
+                        t1 = time.perf_counter()
+                        for (rel, _), data in zip(batch, datas):
+                            zf.writestr(rel, data)
+                        t2 = time.perf_counter()
+                        read_s += t1 - t0
+                        write_s += t2 - t1
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+    return len(items), read_s, write_s
+
+
 class VersionManager:
     def __init__(
         self,
@@ -308,8 +374,20 @@ class VersionManager:
         logger.info(f"添加版本 {vtype} {version}，清单: {manifest_path}")
 
     def build_runtime_jar(
-        self, vtype: str, version: str, output: Path
+        self,
+        vtype: str,
+        version: str,
+        output: Path,
+        *,
+        compression: int = zipfile.ZIP_STORED,
     ) -> Path:
+        """把版本拼成 jar。
+
+        ``compression`` 默认 **不压缩** —— 这是启动路径用的那份（预热 / 启动时拼），
+        115 MB 里 5759 个 class：STORED 拼一次约 1.9 s，DEFLATE 要 7 s 以上，
+        而且每次启动都跑。**导出的那份不一样**（``cli_export`` 传 ``ZIP_DEFLATED``）：
+        一次性、要发给别人，体积从 117 MB 降到 84 MB 明显更值。
+        """
         manifest_path = self.manifest_path(vtype, version)
         if not manifest_path.exists():
             logger.error(f"清单不存在: {manifest_path}")
@@ -317,53 +395,16 @@ class VersionManager:
                 t("storage.manifest_missing", path=manifest_path)
             )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        items = list(manifest["files"].items())
-        # 顺序读几千个小对象时，瓶颈是每次 open/read 的往返而不是带宽，
-        # 多线程并行能吃掉一部分（实测组装 3.1s → 1.8s）。
-        # 顺序：先把数据并行读出来，再往同一个 zip 里顺序写 ——
-        # 写 zip 是共享状态，并行写反而要加锁，得不偿失。
-        # 分批是为了压内存峰值：一批最多 _JAR_BATCH 个文件在内存里，
-        # 而不是一次性把整个 115MB 的 jar 全读进来。
-        # 把「读对象」和「写 zip」分开计时。这两段的瓶颈完全不同：
-        # 读受限于每个小文件的 open/read 往返（也容易被杀毒软件拦），
-        # 写受限于 zip 的 CRC 计算。混在一起计时就没法判断该优化哪边，
-        # 所以日志里分开报。
-        read_s = 0.0
-        write_s = 0.0
-        try:
-            with zipfile.ZipFile(output, "w", zipfile.ZIP_STORED) as zf:
-                if len(items) <= _JAR_BATCH:
-                    for rel, sha in items:
-                        t0 = time.perf_counter()
-                        data = self.store.get_file(sha)
-                        t1 = time.perf_counter()
-                        zf.writestr(rel, data)
-                        t2 = time.perf_counter()
-                        read_s += t1 - t0
-                        write_s += t2 - t1
-                else:
-                    with ThreadPoolExecutor(
-                        max_workers=_JAR_READ_WORKERS
-                    ) as pool:
-                        for start in range(0, len(items), _JAR_BATCH):
-                            batch = items[start : start + _JAR_BATCH]
-                            shas = [sha for _, sha in batch]
-                            t0 = time.perf_counter()
-                            datas = list(pool.map(self.store.get_file, shas))
-                            t1 = time.perf_counter()
-                            for (rel, _), data in zip(batch, datas):
-                                zf.writestr(rel, data)
-                            t2 = time.perf_counter()
-                            read_s += t1 - t0
-                            write_s += t2 - t1
-        except Exception:
-            # 中途失败会在磁盘上留半个 jar。调用方可能只看文件存在就当它可用，
-            # 拿它去启动游戏会得到莫名其妙的报错，所以这里清掉再往上抛。
-            output.unlink(missing_ok=True)
-            raise
+        count, read_s, write_s = _write_zip(
+            self.store,
+            list(manifest["files"].items()),
+            output,
+            compression=compression,
+        )
         logger.info(
-            f"[JAR] {vtype} {version}: {len(items)} 文件 "
-            f"{output.stat().st_size / 1048576:.1f} MB，"
+            f"[JAR] {vtype} {version}: {count} 文件 "
+            f"{output.stat().st_size / 1048576:.1f} MB"
+            f"{'（已压缩）' if compression != zipfile.ZIP_STORED else ''}，"
             f"读 {read_s * 1000:.0f}ms + 写 {write_s * 1000:.0f}ms "
             f"= {(read_s + write_s) * 1000:.0f}ms"
         )
@@ -413,6 +454,28 @@ class VersionManager:
                 logger.warning(f"清单无法解析，跳过其引用统计: {mf}")
         return self.store.garbage_collect(referenced, stop_event)
 
+
+def open_version_manager(
+    base_dir: Path, config: Any | None = None
+) -> VersionManager:
+    """按数据根打开版本库（``versions/`` ＋ ``versions/manifests/``）。
+
+    为什么要有这个函数：**界面**（``gui_core``）和**命令行**（``cli_info``）
+    都要打开同一个版本库。两处各写一遍，等于把「版本库在数据根的哪个位置」
+    写了两遍 —— 将来改布局时漏改一处，症状是「界面看得见、命令行看不见」，
+    而且只在命令行那条路上才复现。
+
+    ``config`` 传进来是为了认 ``version_sources``（自定义来源）；不传就只用
+    内置来源，够工具脚本用。
+    """
+    root = Path(base_dir)
+    return VersionManager(
+        CASStore(root / "versions"),
+        root / "versions" / "manifests",
+        sources=load_sources(config),
+    )
+
+
 def collect_referenced_objects(backup_base: Path) -> set[str]:
     """收集所有存档分类（含回收站）引用到的 CAS 对象，避免误删。"""
     referenced: set[str] = set()
@@ -438,6 +501,53 @@ def _extract_zip_into(zip_path: Path, dest_dir: Path) -> None:
             if target != dest_root and not target.is_relative_to(dest_root):
                 raise ValueError(t("storage.zip_slip", name=name))
         zf.extractall(dest_dir)
+
+
+def list_all_backups(backup_base: Path) -> dict[str, list[Path]]:
+    """扫出所有分类下的备份清单，``{分类名: [清单路径…]}``（分类内**最新在前**）。
+
+    ★ 不查 config 里的 ``profiles``：分类目录在不在、里面有没有备份，看磁盘
+      就知道。配置和磁盘对不上时（用户手删过目录、或者从别处拷来一份备份）
+      以磁盘为准 —— 这里要回答的是「现在能导出什么」，不是「设置页里写着
+      什么」。``--list-backups`` 和 ``--export-backup`` 用同一份结果，就不会
+      出现「列得出来、却导不出」。
+    """
+    root = Path(backup_base)
+    groups: dict[str, list[Path]] = {}
+    if not root.is_dir():
+        return groups
+    try:
+        dirs = sorted(p for p in root.iterdir() if p.is_dir())
+    except OSError as e:
+        logger.warning(f"扫描备份目录失败 {root}: {e}")
+        return groups
+    for d in dirs:
+        manifests = d / "manifests"
+        if not manifests.is_dir():
+            continue
+        # 清单名是 backup_<YYYY-MM-DD_HH-MM-SS>[_序号].json，字典序＝时间序
+        items = sorted(manifests.glob("backup_*.json"), reverse=True)
+        if items:
+            groups[d.name] = items
+    return groups
+
+
+def backup_stamp(manifest_path: Path) -> str:
+    """清单文件名里的那段时间戳 —— ``--export-backup`` 认的就是它。"""
+    name = manifest_path.stem
+    return name[len("backup_"):] if name.startswith("backup_") else name
+
+
+def backup_description(manifest_path: Path) -> str:
+    """备份备注（没写就返回空串）。读坏了不抛 —— 列表里少一行备注而已。"""
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        desc = data.get("description", "")
+        if isinstance(desc, str) and desc.strip():
+            return desc.strip()
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError) as e:
+        logger.warning(f"读取备份备注失败 {manifest_path}: {e}")
+    return ""
 
 
 class BackupManager:
@@ -598,6 +708,33 @@ class BackupManager:
 
         paths.sort(key=_extract_timestamp, reverse=True)
         return paths
+
+    def export_backup(self, manifest_path: Path, output: Path) -> Path:
+        """把一个备份拼成 zip —— **只读 CAS，绝不碰存档目录**。
+
+        ★ 和 ``restore_backup`` 的区别要记牢：恢复是往存档目录里写（那才需要
+          回滚快照那一整套保护），导出只是把对象拼成一个文件。走错成恢复的
+          话，用户「导出个备份发给朋友」会把自己当前存档覆盖掉。
+        ★ 用 DEFLATED：存档里全是 json / bin / 文本，压缩比通常 5~10 倍；
+          版本 jar 那边用 STORED 是因为 Java 要顺序读几千个 class，压缩反而慢。
+        """
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        files = manifest.get("files")
+        if not isinstance(files, dict):
+            raise ValueError(
+                t("storage.backup_manifest_corrupt", path=manifest_path)
+            )
+        count, _, _ = _write_zip(
+            self.store,
+            list(files.items()),
+            output,
+            compression=zipfile.ZIP_DEFLATED,
+        )
+        logger.info(
+            f"[导出] 备份 {manifest_path.name} → {output}"
+            f"（{count} 文件，{output.stat().st_size / 1048576:.2f} MB）"
+        )
+        return output
 
     def get_backup_display(self, manifest_path: Path) -> str:
         """备份列表里显示的那一行。

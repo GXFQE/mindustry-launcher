@@ -386,6 +386,11 @@ the "ENGLISH" line further down.
 
 · 命令行直接启动
   在控制台里加个参数就直奔某个版本（见下面那节），全程不出现启动器窗口。
+  --list 列出本机已有的版本，--help 打印用法说明 —— 这两个连窗口都不建。
+
+· 命令行导出
+  --export 把某个版本拼成一个能直接 java -jar 的 jar，--export-backup 把某个
+  存档备份拼成一个 zip；--list-backups 列出有哪些备份（见下面那节）。
 
 · 启动器自己会更新
   有新版本时，它会在后台悄悄下好，等你下次关掉启动器自动换上 ——
@@ -406,6 +411,17 @@ the "ENGLISH" line further down.
 版本名就是主界面列表里显示的那一行（Mindustry v146、BE v146 这样）；
 只写版本号（v146）也行 —— 前提是它只属于一个类型，撞名会告诉你要写全名。
 
+记不清版本名？先列一下：
+
+    "Mindustry启动器.exe" --list
+
+它把本机已有的版本一行一个打出来（不启动任何东西）。忘了参数怎么写就敲
+--help：用法、退出码、几个注意点都在里面。这两个也都不建窗口 —— 它们连
+界面模块都不加载。
+
+三个参数一次只做一件事：同时给了 --help、--list、--launch，按这个顺序
+只做第一个（问「怎么用」永远先回答；--list 只读，排在启动前面）。
+
 进度和结果都写在你敲命令的那个控制台里：正在启动哪个版本、起来了（带耗时）、
 游戏退出（带玩了多久）、这一局有没有自动备份。
 
@@ -422,11 +438,49 @@ the "ENGLISH" line further down.
 控制台里说清楚原因（写错时把可用的版本列出来），屏幕上不会多出任何窗口。
 
 退出码有意义，脚本里可以直接判断：0 正常（游戏玩完退出也算 0）、1 启动器崩了、
-2 参数写坏、3 没有这个版本、4 版本找到了但没拉起来。
+2 参数写坏、3 没有这个版本或这个备份、4 版本找到了但没拉起来、
+5 导出失败（拼 jar / zip 时出错）。
 （--launch=<版本> 这种写法也认。）
 
 也可以给快捷方式加这个参数（双击即进游戏）。那种情况没有控制台可写，所以出
 问题时会退回成弹窗提示 —— 在控制台里敲，提示就都在控制台里。
+
+
+【把版本 / 存档导出成文件】
+
+两件事都在命令行里做，都不启动游戏、不弹启动器窗口：
+
+· 把一个游戏版本拼成 jar —— 拿到别的机器上能直接 java -jar
+
+      "Mindustry启动器.exe" --export "Mindustry v146"
+
+· 把一个存档备份拼成 zip —— 省略时间戳 = 该分类最新那个
+
+      "Mindustry启动器.exe" --export-backup 默认
+      "Mindustry启动器.exe" --export-backup 默认 2026-09-20_16-35-32
+
+不记得备份都有哪些？先列一下：
+
+    "Mindustry启动器.exe" --list-backups
+
+它按分类分组，一行一个「时间戳 + 备注」。时间戳就是 --export-backup 要填的
+那个值（省掉它 = 该分类最新的那个）。
+
+文件默认写到当前目录，名字是「类型_版本号.jar」/「分类_时间戳.zip」。想放到
+别处就加 --out（可以是一个文件路径，也可以是一个已存在的目录）：
+
+    "Mindustry启动器.exe" --export "Mindustry v146" --out D:\分享\
+
+同名文件不会被覆盖：已经有一个同名的，会自动变成 ..._2.jar、..._3.jar。
+
+导出的 jar 里保留着原版的 Main-Class，所以拿到就能 java -jar；导出的 zip 解压
+出来就是存档目录里的内容（可以直接拷进去用）。
+
+导出的 jar 是压缩过的：同一个版本约 120 MB → 87 MB，拼的时候多等几秒；
+不影响 java -jar（游戏照常读）。存档 zip 本来也是压缩的。
+
+导出是只读的：不碰你当前的存档，也不改任何设置 —— 会写存档目录的是「恢复
+备份」，不是它。
 
 
 【设置里能改什么】
@@ -629,7 +683,13 @@ MAIN FEATURES
 
 - Launch from the command line
   One argument in a console goes straight into a version (see the section
-  below), with no launcher window at all.
+  below), with no launcher window at all. --list prints the versions on this
+  machine and --help prints the usage -- neither creates a window.
+
+- Export from the command line
+  --export packs a version into a jar you can run with java -jar, and
+  --export-backup packs a save backup into a zip; --list-backups shows what
+  backups you have.
 
 - The launcher updates itself
   When a new version is out it downloads quietly in the background and swaps
@@ -653,6 +713,19 @@ The version name is the line shown in the main window's list (Mindustry v146,
 BE v146, ...). Just the version number (v146) works too -- as long as only one
 type has it; if several do, it asks you to spell out the full name instead.
 
+Can't remember the name? List them first:
+
+    "Mindustry启动器.exe" --list
+
+It prints the versions on this machine, one per line (and launches nothing).
+Forgot how the arguments work? Run --help: usage, exit codes and the few
+gotchas are all in there. Neither creates a window -- they don't even load the
+UI module.
+
+One thing at a time: if --help, --list and --launch are all given, only the
+first one in that order is done (a "how do I use this" question is always
+answered first; --list is read-only and comes before launching).
+
 Progress and results are written to the console you typed the command in: which
 version is starting, that it came up (with the time it took), that the game
 exited (with how long you played), and whether this session was backed up.
@@ -675,12 +748,53 @@ appears.
 
 Exit codes are meaningful, so scripts can branch on them: 0 success (quitting
 the game after playing counts as success), 1 the launcher crashed, 2 bad command
-line, 3 no such version, 4 the version was found but would not start.
+line, 3 no such version or backup, 4 the version was found but would not start,
+5 export failed (while packing the jar / zip).
 (--launch=<name> works too.)
 
 A shortcut can carry the argument as well (double-click and play). There is no
 console to write to in that case, so problems fall back to a dialog box -- run
 it from a console and every message stays in that console.
+
+
+EXPORTING A VERSION / A SAVE BACKUP
+
+Both run from a console and never launch the game or open the launcher window:
+
+- Pack a game version into a jar -- runs with java -jar on any machine:
+
+      "Mindustry启动器.exe" --export "Mindustry v146"
+
+- Pack a save backup into a zip -- leaving the timestamp out takes the newest
+  one in that profile:
+
+      "Mindustry启动器.exe" --export-backup 默认
+      "Mindustry启动器.exe" --export-backup 默认 2026-09-20_16-35-32
+
+Not sure which backups you have? List them first:
+
+    "Mindustry启动器.exe" --list-backups
+
+It groups them by profile, one line per "timestamp + note". That timestamp is
+exactly what --export-backup wants (leaving it out means the newest one).
+
+The file goes into the current directory by default, named "type_version.jar" /
+"profile_timestamp.zip". To put it elsewhere add --out (a file path, or an
+existing directory):
+
+    "Mindustry启动器.exe" --export "Mindustry v146" --out D:\\share\\
+
+Nothing is ever overwritten: if the name is already taken it becomes ..._2.jar,
+..._3.jar, and so on.
+
+The exported jar keeps the original Main-Class, so java -jar just works; the
+exported zip unzips straight into the contents of a save folder.
+
+The exported jar is compressed: roughly 120 MB -> 87 MB for a typical version, at
+the cost of a few extra seconds; java -jar and the game are unaffected.
+
+Exporting is read-only: it never touches your current saves or your settings --
+writing to the save folder is what "restore backup" does, not this.
 
 
 WHAT YOU CAN CHANGE IN SETTINGS

@@ -417,9 +417,13 @@ class GameMixin:
         if req is None or self._bench:
             return
         if req.bad_usage:
-            logger.warning(f"命令行参数 {cli.LAUNCH_FLAG} 后面没有版本名，未启动")
+            # 正常情况下轮不到这里 —— 入口（MindustryLauncher.main）已经先拦了
+            # 一道，连界面分支都不进。这里留着是防「有人绕过入口直接构造
+            # CliRequest」；所以开关名要跟着 bad_flag 走，别写死 --launch。
+            flag = req.bad_flag or cli.LAUNCH_FLAG
+            logger.warning(f"命令行参数 {flag} 后面没有值，未启动")
             self._cli_note(
-                t("cli.bad_usage", flag=cli.LAUNCH_FLAG),
+                t("cli.bad_usage", flag=flag),
                 quit_code=cli.EXIT_BAD_USAGE,
             )
             return

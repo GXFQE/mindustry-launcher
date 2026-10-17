@@ -62,7 +62,7 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（614 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（621 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
 python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（164 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）

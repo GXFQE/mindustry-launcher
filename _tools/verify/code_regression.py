@@ -612,6 +612,7 @@ def main():
     test_release_compat_layer()
     test_salvage_game_log()
     test_cli_launch_args()
+    test_game_work_dir()
     test_packed_required_table()
     print("\n" + "=" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
@@ -4593,6 +4594,55 @@ def test_packed_required_table():
     names = names_of(compile(p.read_text(encoding="utf-8"), str(p), "exec"))
     check("反向对照：喂一个不存在的符号会被报出来（否则第 ③ 条等于没查）",
           [s for s in fake["launcher.cli"] if s not in names] == ["这个符号不可能存在"])
+
+
+# --------------------------------------- 12x. 游戏进程的工作目录（真踩过）
+def test_game_work_dir():
+    """游戏的工作目录必须是我们自己的干净目录，**不能**是 %TEMP%。
+
+    踩过的坑：Mindustry/Arc 会把进程工作目录当成资源根，cwd 下只要有
+    ``bundles/ sprites/ sounds/ maps/`` 就覆盖 jar 内的同名资源。把 cwd 设成
+    %TEMP% 之后，里头某个模组解压残留的 ``bundles/bundle_zh_CN.properties``
+    （99 KB / 948 键）把 jar 内完整那份（190 KB / 3496 键）盖掉，界面整片
+    退化成 ``@//play/`` 这样的原始 key —— 看着像「翻译文件炸了」。
+    """
+    print("\n[12x] 游戏进程的工作目录")
+    from launcher import gui_game
+
+    src = (ROOT / "launcher" / "gui_game.py").read_text(encoding="utf-8")
+
+    # 金丝雀：源文件里确实有给 Popen 传 cwd 的地方，否则下面两条是空跑
+    check("金丝雀：源码里确实存在 cwd= 的传参", "cwd=" in src)
+
+    # ① 不能再把系统临时目录当工作目录（这就是原来那行）
+    check(
+        "★ 游戏进程的工作目录不再是系统临时目录",
+        "cwd=str(Path(tempfile.gettempdir()))" not in src,
+    )
+
+    # ② _game_work_dir 返回的目录必须存在、且在 base_dir 之下
+    sb = Path(tempfile.mkdtemp())
+    got = Path(gui_game._game_work_dir(sb))
+    check("工作目录会被真的建出来（Popen 传不存在的 cwd 会直接起不来）",
+          got.is_dir(), str(got))
+    check("工作目录落在启动器自己的目录下（不是别处的共享目录）",
+          str(got).lower().startswith(str(sb).lower()), str(got))
+    check("工作目录不会退化成 %TEMP%",
+          got != Path(tempfile.gettempdir()), str(got))
+
+    # ③ 反向对照：同一套判定逻辑，喂回原来那行必须判红
+    def has_old_style(code: str) -> bool:
+        return "cwd=str(Path(tempfile.gettempdir()))" in code
+
+    old_line = "cwd=str(Path(tempfile.gettempdir()))"
+    check("反向对照：喂回原来那行会被抓出来（否则第 ① 条等于没查）",
+          not has_old_style(src) and has_old_style(old_line))
+
+    # ④ 目录里不该有会被当资源吃掉的子目录——真要有，等于复现那次事故
+    shadow = [d for d in ("bundles", "sprites", "sounds", "maps")
+              if (got / d).exists()]
+    check("工作目录里没有会被当成内部资源的 bundles/sprites/sounds/maps",
+          not shadow, str(shadow))
 
 
 if __name__ == "__main__":

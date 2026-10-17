@@ -19,6 +19,44 @@ from .i18n import t
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# 游戏进程的**工作目录**
+#
+# ★★ 必须是启动器独占的干净目录，**绝不能是 %TEMP% 这类全局共享目录**。
+#
+# 为什么：Mindustry/Arc 会把进程工作目录当作**资源根**——cwd 下面若存在
+# ``bundles/ sprites/ sounds/ maps/``，就会**覆盖 jar 内的同名资源**。
+# 而 %TEMP% 是全局垃圾场，任何安装器/解压工具都可能在里面留下残缺的资源：
+# 实测 %TEMP%\bundles\bundle_zh_CN.properties 只有 99 KB / 948 个键，而 jar 内
+# 完整那份是 190 KB / 3496 个键，两者**键一个都不重合**（连 play、editor、
+# database.button 都没有）⇒ 界面整片退化成 ``@//play/`` 这样的原始 key，
+# 同时 %TEMP%\sprites|sounds|maps 里某个模组的残留还会被当成**已启用**的
+# 内容加载出来（被禁用的模组却显示标题和图标，就是这么来的）。
+#
+# 「有默认值兜底」的思路在这里救不了场：只要工作目录落在共享目录，别人随手
+# 解压一份东西就能把游戏资源搞坏，而 %TEMP% 里有什么我们管不了。所以只能
+# 给游戏一个专属目录。
+# ---------------------------------------------------------------------------
+_GAME_WORK_DIR_NAME = "runtime"
+
+
+def _game_work_dir(base_dir: Path) -> str:
+    """给子进程用的工作目录（返回的一定是**已存在**的目录）。
+
+    Windows 上给 ``Popen`` 传不存在的 cwd 会直接抛 ``FileNotFoundError``，
+    连 java 都起不来，所以这里必须先保证目录存在。装在只读位置（Program
+    Files 之类）时建不了，退回 ``base_dir`` 本身 —— 那里也是「正常工作」的
+    情形，比启动失败好。
+    """
+    candidate = Path(base_dir) / _GAME_WORK_DIR_NAME
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        return str(candidate)
+    except OSError as e:
+        logger.warning(f"游戏工作目录建不了（{candidate}：{e}），退回 {base_dir}")
+        return str(base_dir)
+
+
 class GameMixin:
     # 换版本时用 after 去抖，连续按方向键不会每次都真拼一遍
     _PREHEAT_DEBOUNCE_MS = 800
@@ -594,9 +632,11 @@ class GameMixin:
             with self._proc_lock:
                 self.current_process = subprocess.Popen(
                     cmd,
-                    # 固定成系统临时目录：预热 jar 放在它下面的子目录里，
-                    # 直接用 parent 会顺手把子目录当工作目录传出去。
-                    cwd=str(Path(tempfile.gettempdir())),
+                    # ★ 工作目录必须是启动器自己的干净目录（见 _game_work_dir
+                    #   的说明）。原来这里是系统临时目录，那是**全局共享**的：
+                    #   里面躺着别人解压残留的 bundles/ 就会被游戏当成内部
+                    #   资源加载，把完整的翻译盖成残缺那份（详见那里）。
+                    cwd=_game_work_dir(self.base_dir),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,

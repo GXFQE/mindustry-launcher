@@ -393,6 +393,8 @@ REQUIRED = {
         #   于是 `--export` 反手打开界面（而它本该连 Tk 都不建）。
         "EXPORT_FLAG", "EXPORT_BACKUP_FLAG", "LIST_BACKUPS_FLAG", "OUT_FLAG",
         "export_only", "EXIT_EXPORT_FAILED",
+        # 2026-10-17 傍晚：--get / --set（看和改设置，同样在 import tkinter 之前）
+        "GET_FLAG", "SET_FLAG", "cfg_only", "EXIT_CONFIG_FAILED",
         # 「可用版本」列出来时的上限（弹窗不把整个版本列表糊上去）
         "AVAILABLE_LIMIT",
         # 解析：认 `--launch X` 与 `--launch=X`，不认识的参数一律忽略
@@ -429,6 +431,26 @@ REQUIRED = {
         "resolve_output", "safe_filename", "_resolve_profile",
         "version_filename",
         "EXIT_EXPORT_FAILED", "EXIT_NO_VERSION",
+    ],
+    # 2026-10-17 新增：`--get` / `--set` 的全部实现（严格校验 + 回读 + 锁）。
+    # ★ 严格表（GLOBAL_SPECS / JVM_SPECS / PROFILE_SPECS）一旦缺了，
+    #   `--set` 会把所有键都当成「没有可改的项」—— 用户看到的是「没有这一项」，
+    #   但 `--get` 又列得出来，最难查的那类矛盾。
+    "launcher.cli_cfg": [
+        "run",
+        "render_get", "do_set",
+        # 严格表与解析（坏值必须报错，绝不退默认）
+        "GLOBAL_SPECS", "JVM_SPECS", "PROFILE_SPECS",
+        "resolve", "parse_value",
+        # 读 / 写 / 回读（写盘后重新读文件对账）
+        "read_value", "write_value", "apply_pairs", "_read_disk", "_dig",
+        "EXIT_BAD_USAGE", "EXIT_CONFIG_FAILED",
+    ],
+    # 2026-10-17 新增：配置写盘的进程间锁。★ 少了它，`--set` 会在启动器
+    # 开着时照改，然后被对方退出时那次 save() 静默覆盖 —— 不报错、不留痕。
+    "launcher.applock": [
+        "LOCK_PREFIX",
+        "lock_file", "acquire", "AppLock",
     ],
     # 2026-10-16 新增：把话说给「敲命令的那个控制台」。★ 打包成**窗口子系统**
     # 之后这个进程天生没有控制台（sys.stdout 是 None，print 被 Python 直接

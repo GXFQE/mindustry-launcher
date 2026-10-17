@@ -12,16 +12,20 @@
   也没必要加载 Tk 那一堆 DLL（省点开销，也少一类出错可能）。
 
 启动器自己的其它命令行参数（``--launch <版本>`` / ``--list`` / ``--list-backups``
-/ ``--help`` / ``--export <版本>`` / ``--export-backup <分类> [<时间戳>]`` /
-``--out <路径>``，见 ``launcher/cli.py``）在这里解析成 ``CliRequest`` 再分派 ——
-解析规则和「版本名怎么匹配」都在那边，本文件不掺和。
+/ ``--help`` / ``--get [<键>]`` / ``--set <键>=<值>`` / ``--export <版本>`` /
+``--export-backup <分类> [<时间戳>]`` / ``--out <路径>``，见 ``launcher/cli.py``）
+在这里解析成 ``CliRequest`` 再分派 —— 解析规则和「版本名怎么匹配」都在那边，
+本文件不掺和。
 
-★ 三类用法，轻重不同：
+★ 四类用法，轻重不同：
 
-  * ``--list`` / ``--list-backups`` / ``--help`` —— **只输出信息**。它们在
-    ``import tkinter`` **之前**就交给 ``launcher/cli_info.py`` 处理掉：这条路上
-    一个 Tk 对象都不会建（连模块都不 import）。读版本列表走
-    ``storage.open_version_manager``，和界面同一个打开方式。
+  * ``--list`` / ``--list-backups`` / ``--help`` / ``--get`` —— **只输出信息**。
+    它们在 ``import tkinter`` **之前**就交给 ``launcher/cli_info.py``（``--get``
+    在 ``cli_cfg.py``）处理掉：这条路上一个 Tk 对象都不会建（连模块都不 import）。
+    读版本列表走 ``storage.open_version_manager``，和界面同一个打开方式。
+  * ``--set <键>=<值>`` —— **只改配置**。同样在 import tkinter 之前，但它会先
+    拿一把「配置锁」（``applock.py``）：启动器开着时拿不到就拒绝改，因为那个
+    实例退出时会用内存里的旧配置整个写回，改动会被静默吃掉。
   * ``--export`` / ``--export-backup`` —— **只产出文件**。同样在 ``import
     tkinter`` 之前交给 ``launcher/cli_export.py``：拼 jar / zip 不需要界面，
     只是慢（版本那边要读几千个 CAS 对象）。
@@ -38,9 +42,9 @@
 
   界面侧则**全程不露窗口**（见 ``CoreMixin.__init__`` 里那句 withdraw）。
 
-★ 参数写了一半（``--launch`` / ``--export`` 后面没跟值）**在入口就答复掉**，
-  连界面分支都不进 —— 为一句「你少写了个名字」建个窗口再收掉，既没必要
-  又会闪一下（见 ``cli_info.report_bad_usage``）。
+★ 参数写了一半（``--launch`` / ``--export`` / ``--set`` 后面没跟值）**在入口
+  就答复掉**，连界面分支都不进 —— 为一句「你少写了个名字」建个窗口再收掉，
+  既没必要又会闪一下（见 ``cli_info.report_bad_usage``）。
 """
 import json
 import sys
@@ -106,6 +110,13 @@ def main() -> int:
         from launcher import cli_info
 
         code = cli_info.run(cli_request, has_console)
+    elif cli_request.cfg_only:
+        # ★ --get / --set：看和改设置，同样不需要界面。--set 会先拿一把
+        #   「配置锁」（见 applock.py）—— 启动器开着时它拿不到，于是拒绝改，
+        #   因为那个实例退出时会用内存里的旧配置整个写回、把改动吃掉。
+        from launcher import cli_cfg
+
+        code = cli_cfg.run(cli_request, has_console)
     elif cli_request.export_only:
         # ★ --export / --export-backup：和上面同理，也不需要界面。只是这两个
         #   会往磁盘写东西、慢得多（拼版本要读几千个 CAS 对象）。

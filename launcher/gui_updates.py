@@ -207,6 +207,10 @@ class UpdatesMixin:
         # 上面那次 cleanup_preheat() 之后才被删掉的，目录此时才空得下来。
         self.cleanup_preheat()
         self.config.save()
+        # ★ 配置落地之后才放锁：锁在的时候命令行 --set 会被拒绝（见 applock.py），
+        #   放了才轮到它改 —— 顺序反过来的话，它可能在我们写盘之前先改，
+        #   然后被这次 save() 覆盖掉。
+        self.app_lock.release()
         # ★ 自更新最后一步：配置落地之后，才把「换程序」交给执行体。
         #   它在另一个进程里等本进程退出，所以这里调用完照常往下走。
         self._apply_staged_update()

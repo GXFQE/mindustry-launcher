@@ -232,6 +232,10 @@ def main() -> int:
         print("\n[1] 主窗口与设置页布局")
         app = MindustryLauncher()
         app.root.update()
+        # ★ 配置写盘的**进程间**锁（applock）：启动器活着的时候必须占着它。
+        #   命令行 --set 靠「拿不到锁」判断启动器开着，从而拒绝改 —— 少了这次
+        #   占锁，--set 会照改，然后被本进程退出时那次 save() 静默覆盖。
+        check("启动器启动时占住了配置锁", app.app_lock.held, str(app.app_lock.path))
         check("主窗口标题正确",
               app.root.title().startswith("Mindustry 启动器"),
               app.root.title())
@@ -1640,6 +1644,8 @@ def main() -> int:
         check("关窗口后没留下定时器", app._log_poll_id is None)
         app.on_closing()
         check("启动器能干净退出", True)
+        check("★ 关窗后放掉了配置锁（不然命令行 --set 会一直被拒）",
+              not app.app_lock.held)
         app = None
     finally:
         os.chdir(cwd_backup)

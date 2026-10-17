@@ -91,6 +91,7 @@ os.environ["MDT_LANG"] = "zh_CN"
 
 import launcher.storage as S  # noqa: E402
 from launcher import cli as CLI  # noqa: E402
+from launcher import cli_cfg as CLI_CFG  # noqa: E402
 from launcher import cli_export as CLI_EXPORT  # noqa: E402
 from launcher import cli_info as CLI_INFO  # noqa: E402
 from launcher import console as CONSOLE  # noqa: E402
@@ -2293,6 +2294,27 @@ def _calls_named(node, dotted):
     ]
 
 
+def _line_of_call(node, dotted):
+    """node 子树里调用 ``dotted`` 的最小行号；没有就返回 ``inf``。
+
+    ``inf`` 是**故意的**：用它去比 ``a < b`` 一定不成立，所以「那个调用根本
+    不存在」会被断言抓住，而不是悄悄通过（漏掉一段代码比顺序写反更常见）。
+    """
+    hits = [n.lineno for n in _calls_named(node, dotted)]
+    return min(hits) if hits else float("inf")
+
+
+def _raises(fn, exc):
+    """``fn()`` 会不会抛 ``exc``（回归里用来钉「坏值必须报错，不许静默退默认」）。"""
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:                                    # noqa: BLE001
+        return False
+    return False
+
+
 def _kw_arg_is(node, kw, expr):
     """node 子树里有没有 ``kw=<expr>`` 这种关键字参数（expr 按源码文本比）。
 
@@ -3742,6 +3764,139 @@ def test_cli_launch_args():
     check("--out 单独给 ⇒ 什么也不做（它只是别的开关的修饰词）",
           not r.used, str(r))
 
+    # ---- --get / --set：看和改设置（同样不建窗口） ----
+    r = req(["--get"])
+    check("--get 单独给 ⇒ 列全部设置，且只算「改配置」这一类",
+          r.get_config and r.get_key == "" and r.cfg_only
+          and not r.info_only and r.used, str(r))
+    r = req(["--get", "language"])
+    check("--get <键> ⇒ 只看一项", r.get_key == "language", str(r))
+    r = req(["--get=language"])
+    check("--get=<键> 等号写法同样认", r.get_key == "language", str(r))
+    r = req(["--get", "--list"])
+    check("★ --get 后面跟开关时**不许**把开关当成键吞掉",
+          r.list_versions and not r.get_config, str(r))
+    r = req(["--set", "max_log_files=10"])
+    check("--set <键>=<值> ⇒ 收一项，且只改配置（不启动、不建窗口）",
+          r.set_pairs == ("max_log_files=10",) and r.cfg_only, str(r))
+    r = req(["--set", "a=1", "b=2"])
+    check("--set 一次给多项（一次读、一次写）",
+          r.set_pairs == ("a=1", "b=2"), str(r))
+    r = req(["--set", "extra_vm_args=-Xmx4G -XX:+UseZGC"])
+    check("★ 整段带空格的参数（用户加了引号）算**一项**",
+          r.set_pairs == ("extra_vm_args=-Xmx4G -XX:+UseZGC",), str(r))
+    r = req(["--set", "extra_vm_args=-Dx=y"])
+    check("值里再有等号也只是一项（按第一个 = 切）",
+          r.set_pairs == ("extra_vm_args=-Dx=y",), str(r))
+    r = req(["--set=max_log_files=10"])
+    check("--set=键=值 这种等号写法也认",
+          r.set_pairs == ("max_log_files=10",), str(r))
+    r = req(["--set"])
+    check("--set 后面什么都没有 ⇒ 写坏，bad_flag 点名是它",
+          r.bad_usage and r.bad_flag == CLI.SET_FLAG and not r.set_pairs, str(r))
+    r = req(["--set", "max_log_files"])
+    check("★ --set 里有一项不是 键=值 ⇒ 报错（bad_token 记着是哪个）",
+          r.bad_usage and r.bad_token == "max_log_files", str(r))
+    r = req(["--set", "a=1", "b", "--launch", "v1"])
+    check("★★ 混着写坏的一项时**不做**「先改一半」——"
+          "悄悄改掉一部分比报错危险得多",
+          r.bad_usage and r.bad_token == "b" and not r.set_pairs, str(r))
+    r = req(["--set", "a=1", "--launch", "v1"])
+    check("★ --set 压过 --launch（只改个 json，不该顺手把游戏拉起来）",
+          r.set_pairs == ("a=1",) and r.launch == "", str(r))
+    r = req(["--get", "--export", "v1"])
+    check("★ --get 压过 --export（先看有什么）",
+          r.get_config and not r.export, str(r))
+    r = req(["--get", "--set", "a=1"])
+    check("★ 同时给 --get 与 --set ⇒ 只看不改（只读优先）",
+          r.get_config and not r.set_pairs, str(r))
+
+    # ---- 可改的键：严格表拒绝「不该开放的东西」 ----
+    for bad_key in ("version_sources", "github_mirror_presets",
+                    "profile.默认.data_dir", "jvm.vm_args", "jvm.main_class"):
+        try:
+            CLI_CFG.resolve(bad_key)
+            raised = False
+        except CLI_CFG.BadKey:
+            raised = True
+        check(f"★ 不开放的键被拒：{bad_key}", raised)
+    check("profile.<分类>.<键> 能解析（分类名带点也不切错）",
+          CLI_CFG.resolve("profile.v1.2.max_backups").profile == "v1.2")
+    check("profile..max_backups（分类名为空）⇒ 当成未知键",
+          _raises(lambda: CLI_CFG.resolve("profile..max_backups"),
+                  CLI_CFG.BadKey))
+
+    # ---- 值的严格解析：坏值必须抛，**绝不**退默认 ----
+    spec_int = next(s for s in CLI_CFG.GLOBAL_SPECS
+                    if s.key == "max_log_files")
+    spec_bool = next(s for s in CLI_CFG.GLOBAL_SPECS
+                     if s.key == "hide_on_launch")
+    spec_choice = next(s for s in CLI_CFG.GLOBAL_SPECS if s.key == "language")
+    spec_mirror = next(s for s in CLI_CFG.GLOBAL_SPECS
+                       if s.key == "github_mirror")
+    check("整数值：范围内收下", CLI_CFG.parse_value(spec_int, "10") == 10)
+    check("★ 整数：非数字抛 BadValue（不是静默退 20）",
+          _raises(lambda: CLI_CFG.parse_value(spec_int, "很多"),
+                  CLI_CFG.BadValue))
+    check("★ 整数：超范围抛 BadValue（不是静默夹取）",
+          _raises(lambda: CLI_CFG.parse_value(spec_int, "9999"),
+                  CLI_CFG.BadValue))
+    check("开关：true/false 之外一律抛（\"false\" 不会被当成 True）",
+          CLI_CFG.parse_value(spec_bool, "false") is False
+          and _raises(lambda: CLI_CFG.parse_value(spec_bool, "maybe"),
+                      CLI_CFG.BadValue))
+    check("枚举：大小写不敏感、坏值抛",
+          CLI_CFG.parse_value(spec_choice, "EN_us") == "en_US"
+          and _raises(lambda: CLI_CFG.parse_value(spec_choice, "fr_FR"),
+                      CLI_CFG.BadValue))
+    check("镜像：写主机名会补成完整地址",
+          CLI_CFG.parse_value(spec_mirror, "ghfast.top")
+          == "https://ghfast.top/")
+    check("镜像：留空 = 直连（空是合法值）",
+          CLI_CFG.parse_value(spec_mirror, "") == "")
+    check("镜像：不像地址就抛（不静默变成直连）",
+          _raises(lambda: CLI_CFG.parse_value(spec_mirror, "不是地址"),
+                  CLI_CFG.BadValue))
+
+    # ---- --set 的落盘顺序：改 → 回读内存 → 存 → 回读磁盘 ----
+    cfg_mod = ast.parse(
+        (ROOT / "launcher" / "cli_cfg.py").read_text(encoding="utf-8"))
+    do_set_fn = _func_def(cfg_mod, "do_set")
+    check("cli_cfg 顶层不 import tkinter（这条路上一个 Tk 对象都不建）",
+          not any(
+              isinstance(n, ast.Import)
+              and any(a.name.split(".")[0] == "tkinter" for a in n.names)
+              for n in cfg_mod.body
+          )
+          and not any(
+              isinstance(n, ast.ImportFrom)
+              and (n.module or "").split(".")[0] == "tkinter"
+              for n in cfg_mod.body
+          ))
+    check("★ do_set 先拿锁再读配置（顺序反了就等于没锁）",
+          bool(do_set_fn) and _line_of_call(do_set_fn, "applock.acquire")
+          < _line_of_call(do_set_fn, "load_config"))
+    check("★★ do_set 在 save() **之后**重新读磁盘对账"
+          "（save() 内部把 OSError 吞成日志，不查就发现不了写失败）",
+          _line_of_call(do_set_fn, "config.save")
+          < _line_of_call(do_set_fn, "_read_disk"))
+    check("★ 改配置不走「读文件容错」那张表（不许出现 _coerce_global / "
+          "normalize_bool / parse_bool —— 它们会把坏值退成默认）",
+          not any(
+              isinstance(n, ast.Name)
+              and n.id in {"_coerce_global", "normalize_bool", "parse_bool"}
+              for n in ast.walk(cfg_mod)
+          ))
+    lock_mod = ast.parse(
+        (ROOT / "launcher" / "applock.py").read_text(encoding="utf-8"))
+    check("★ 锁用**非阻塞**的 LK_NBLCK（阻塞等待会让命令行卡在看不见的地方）",
+          _refers(lock_mod, "LK_NBLCK") and _has_str(lock_mod, "busy"))
+    check("锁文件放系统临时目录（不往数据根写运行期文件）",
+          any(
+              isinstance(n, ast.Attribute) and n.attr == "gettempdir"
+              for n in ast.walk(lock_mod)
+          ))
+
     # ---- 导出的输出路径：真在临时目录里试，绝不碰用户数据 ----
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
@@ -3845,6 +4000,12 @@ def test_cli_launch_args():
         n for n in ast.walk(main_def)
         if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.export_only"
     ]
+    # 看 / 改设置那条路（--get / --set）：同样不需要界面，而且 --set 会写
+    # config.json —— 排在界面分支后面就意味着「为了改一个 json 先建窗口」。
+    cfg_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.cfg_only"
+    ]
     gui_import = [
         n for n in ast.walk(main_def)
         if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("gui")
@@ -3859,22 +4020,28 @@ def test_cli_launch_args():
     check("入口有一条 cli_request.export_only 分支，且真的调了 cli_export.run",
           len(export_if) == 1 and bool(_calls_named(export_if[0], "cli_export.run")),
           f"{len(export_if)} 条")
+    check("入口有一条 cli_request.cfg_only 分支，且真的调了 cli_cfg.run",
+          len(cfg_if) == 1 and bool(_calls_named(cfg_if[0], "cli_cfg.run")),
+          f"{len(cfg_if)} 条")
     check("★ 入口**先拦参数写坏**（--export 缺值时不许掉进界面分支去闪一下窗口）",
           len(bad_if) == 1
           and bool(_calls_named(bad_if[0], "cli_info.report_bad_usage")),
           f"{len(bad_if)} 条")
-    check("……三条分支的先后顺序是 写坏 → 只输出 → 导出",
-          len(bad_if) == 1 and len(info_if) == 1 and len(export_if) == 1
-          and bad_if[0].lineno < info_if[0].lineno < export_if[0].lineno,
+    check("……四条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出",
+          len(bad_if) == 1 and len(info_if) == 1 and len(cfg_if) == 1
+          and len(export_if) == 1
+          and bad_if[0].lineno < info_if[0].lineno
+          < cfg_if[0].lineno < export_if[0].lineno,
           f"{bad_if[0].lineno if bad_if else '?'} / "
           f"{info_if[0].lineno if info_if else '?'} / "
+          f"{cfg_if[0].lineno if cfg_if else '?'} / "
           f"{export_if[0].lineno if export_if else '?'}")
     # ★ 真机实测抓到的：这一分支原来是 `return cli_info.run(...)`，于是
     #   `--list` / `--help` 输出完就没了下文 —— 跳过下面那行「启动器已退出
     #   （退出码 N）」。用户看到的是「输出完就停住」，和 `--launch` 的收尾
     #   约定不一致（那一行是 cmd 不等待窗口程序时唯一的「结束了」信号）。
     #   所以：这几条分支里都不许有 return，全函数只留最后那一个。
-    branches = [b for b in (bad_if[:1] + info_if[:1] + export_if[:1])]
+    branches = [b for b in (bad_if[:1] + info_if[:1] + cfg_if[:1] + export_if[:1])]
     branch_returns = [
         n for b in branches for n in ast.walk(b) if isinstance(n, ast.Return)
     ]
@@ -3891,6 +4058,12 @@ def test_cli_launch_args():
           f"分支 L{info_if[0].lineno if info_if else '?'}"
           f" / gui L{min((n.lineno for n in gui_import), default=0)}"
           f" / tk L{min((n.lineno for n in tk_import), default=0)}")
+    check("★ --get / --set 那条分支同样排在 import tkinter 之前"
+          "（改个 json 不该先把 Tk 拉起来）",
+          len(cfg_if) == 1 and bool(gui_import) and bool(tk_import)
+          and cfg_if[0].lineno < min(n.lineno for n in gui_import)
+          and cfg_if[0].lineno < min(n.lineno for n in tk_import),
+          f"分支 L{cfg_if[0].lineno if cfg_if else '?'}")
 
     info_mod = ast.parse(
         (ROOT / "launcher" / "cli_info.py").read_text(encoding="utf-8"))
@@ -3934,6 +4107,9 @@ def test_cli_launch_args():
               for n in ("render_backups", "report_bad_usage")))
     check("cli_info.run 里分派了 --list-backups",
           _refers(_func_def(info_mod, "run"), "list_backups"))
+    check("cli_cfg.run 里分派了 --set（只读优先：先看 get）",
+          _refers(_func_def(cfg_mod, "run"), "set_pairs")
+          and _refers(_func_def(cfg_mod, "run"), "get_key"))
 
     # ---- 压缩：导出那份压、启动那份不压（同一个函数，靠参数分道） ----
     storage_ast = ast.parse(
@@ -3954,13 +4130,15 @@ def test_cli_launch_args():
                      "compression", "zipfile.ZIP_DEFLATED"))
 
     help_text = CLI_INFO.render_help()
-    check("--help 渲染得出来：七个开关都写进去了",
+    check("--help 渲染得出来：九个开关都写进去了",
           all(f in help_text for f in (
               CLI.LAUNCH_FLAG, CLI.LIST_FLAG, CLI.HELP_FLAG,
               CLI.EXPORT_FLAG, CLI.EXPORT_BACKUP_FLAG,
-              CLI.LIST_BACKUPS_FLAG, CLI.OUT_FLAG)))
-    check("--help 里写了新的退出码 5（导出失败）",
-          "5" in help_text and "导出" in help_text)
+              CLI.LIST_BACKUPS_FLAG, CLI.OUT_FLAG,
+              CLI.GET_FLAG, CLI.SET_FLAG)))
+    check("--help 里写了退出码 5（导出失败）与 6（改配置失败）",
+          "5" in help_text and "6" in help_text
+          and "导出" in help_text and "配置" in help_text)
     check("★ --help 渲染后没有残留占位符（少传参数会原样显示 {cmd} 这种怪东西）",
           "{" not in help_text and "}" not in help_text, repr(help_text[:40]))
     check("--list 空列表时说人话（不是空白）",

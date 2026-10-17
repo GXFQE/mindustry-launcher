@@ -62,7 +62,7 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（575 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（614 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
 python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（164 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
@@ -158,7 +158,7 @@ python _tools/verify/release_check.py           # 解压即用（会弹 GUI 窗�
 ## 界面语言内部约定
 
 界面文案全部放在 `lang/*.json` 里，代码只写 key（`t("settings.save_return")`）。
-2026-10-05 起**全部模块已迁完**（现在 29 个源文件、431 条 key），门禁是条硬线：
+2026-10-05 起**全部模块已迁完**（现在 31 个源文件、453 条 key），门禁是条硬线：
 代码里再写死一条界面文案，`i18n_check.py` 当场报错。
 
 - **`zh_CN.json` 是基准包**：新增文案先写它，再补别的语言。两份文件的 key 集合与

@@ -45,6 +45,9 @@ Chinese in the first half, English in the second.
 - **Export from the command line** — `--export` packs a version into a jar you can run
   with `java -jar`, and `--export-backup` packs a save backup into a zip;
   `--list-backups` shows what backups you have.
+- **Settings from the command line** — `--get` shows the current settings and
+  `--set key=value` changes them (takes effect on the next start); it refuses while
+  the launcher is running, so its exit-time save cannot overwrite your change.
 - **Log viewer** — captures the game's output so you can read it after it exits.
 
 ## Launching a version from the command line
@@ -69,9 +72,10 @@ into that version. **The launcher window never appears** — all you see is the 
   It prints the versions on this machine, one per line (and launches nothing). Forgot
   how the arguments work? Run `--help`: usage, exit codes and the few gotchas are all
   in there. Neither of them creates a window — they don't even load the UI module.
-- **One thing at a time**: if `--help`, `--list` and `--launch` are all given, only the
-  first one in that order is done (a "how do I use this" question is always answered
-  first; `--list` is read-only and comes before launching).
+- **One thing at a time**, in this order: `--help` → `--list` → `--list-backups`
+  → `--get` → `--set` → `--export` → `--export-backup` → `--launch` (read-only ones
+  come first; exporting comes before launching because it changes no state, while
+  launching holds the save folder).
 - Progress and results are written to **the console you typed the command in**: which
   version is starting, that it came up (with the time it took), that the game exited
   (with how long you played), and whether this session was backed up.
@@ -91,7 +95,8 @@ into that version. **The launcher window never appears** — all you see is the 
 - Exit codes are meaningful, so scripts can branch on them: `0` success (quitting the
   game after playing counts as success), `1` the launcher crashed, `2` bad command line,
   `3` no such version or backup, `4` the version was found but would not start,
-  `5` export failed (while packing the jar / zip).
+  `5` export failed (while packing the jar / zip), `6` changing the config failed
+  (launcher running / not writable).
   `--launch=<name>` works too, and the console you pressed Enter in is the one used.
 
 ★ A shortcut can carry the argument as well (double-click and play). There is no console
@@ -131,6 +136,45 @@ Both run from a console and **never launch the game or open the launcher window*
   at the cost of a few extra seconds; `java -jar` and the game are unaffected.
 - Exporting is **read-only**: it never touches your current saves or your settings —
   writing to the save folder is what "restore backup" does, not this.
+
+## Changing settings from the console
+
+Everything the Settings page can change is available from the console too — handy in
+scripts, or when you would rather not open the window:
+
+```
+:: show every setting (one per line: key = value  # description; defaults marked)
+"Mindustry启动器.exe" --get
+
+:: show a single one
+"Mindustry启动器.exe" --get language
+
+:: change one or several (one read, one write; if any pair is wrong, none is applied)
+"Mindustry启动器.exe" --set max_log_files=10
+"Mindustry启动器.exe" --set language=en_US auto_update=false
+```
+
+- Whatever `--get` prints can be copied **straight** into `--set`: `hide_on_launch`,
+  `jvm.jre_path`, `profile.默认.max_backups`. Replace the profile name with your own
+  (the ones on the Settings page).
+- A bad value is **reported** rather than quietly stored as the default: numbers have
+  ranges (mirror rounds 1~3, logs 1~200, minimum playtime 1~60, max backups 1~50),
+  the language is one of `auto` / `zh_CN` / `en_US`, and the mirror must look like an
+  address (empty = direct). **If any pair is wrong, none is applied** — no half-done
+  changes.
+- It is **refused while the launcher is running** (exit code `6`): the launcher writes
+  its in-memory config back on exit and would overwrite the change — close it first.
+  "Save and go back" in the UI does not have this problem.
+- Changes take effect **the next time the launcher starts** (language, mirror and JVM
+  arguments are read once at startup).
+- Quote an argument that contains spaces (otherwise cmd splits it in two and the second
+  part is reported as "not key=value"):
+  ```
+  "Mindustry启动器.exe" --set "extra_vm_args=-Xmx4G -XX:+UseZGC"
+  ```
+- Not everything is exposed: `version_sources` and `github_mirror_presets` are arrays,
+  and `profile.<name>.data_dir` does **not** move any files (the easiest thing to
+  misread) — edit `config.json` or use the UI for those.
 
 ## Where your data lives
 

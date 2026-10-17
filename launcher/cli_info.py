@@ -31,6 +31,7 @@ from .cli import (
     EXIT_OK,
     EXPORT_BACKUP_FLAG,
     LAUNCH_FLAG,
+    SET_FLAG,
     CliRequest,
 )
 from .config import ConfigManager
@@ -120,21 +121,34 @@ def render_backups() -> str:
 
 
 def report_bad_usage(request: CliRequest, has_console: bool) -> int:
-    """参数写了一半（``--launch`` / ``--export`` 后面没跟值）：说清楚 + 退出码 2。
+    """参数写了一半（``--launch`` / ``--export`` / ``--set`` 缺值）：说清楚 + 退出码 2。
 
     ★ 在**入口**就处理掉、根本不进界面。这类命令要的是「在控制台里把事做完」，
       为一句「你少写了个名字」建一个窗口（再立刻收掉）既不必要，也正是零界面
       约定要避免的 —— 而且会闪一下。
-    ★ ``--export-backup`` 缺的是**分类名**不是版本名，话术不一样（见那个分支）。
+    ★ ``--export-backup`` 缺的是**分类名**不是版本名，话术不一样（见那个分支）；
+      ``--set`` 缺的是「键=值」，而且「哪一项不是 键=值」和「一项都没给」
+      也要分开说（``bad_token``）—— 前者多半是带空格的参数忘了加引号。
     """
     flag = request.bad_flag or LAUNCH_FLAG
-    key = (
-        "cli.bad_usage_backup"
-        if flag == EXPORT_BACKUP_FLAG
-        else "cli.bad_usage"
+    if flag == SET_FLAG and request.bad_token:
+        key = "cli.set_bad_pair"
+    elif flag == SET_FLAG:
+        key = "cli.bad_usage_set"
+    elif flag == EXPORT_BACKUP_FLAG:
+        key = "cli.bad_usage_backup"
+    else:
+        key = "cli.bad_usage"
+    # 几段文案的占位符不同（cmd / flag / token），多传的会被 format 忽略
+    say(
+        t(
+            key,
+            flag=flag,
+            cmd=command_name(),
+            token=request.bad_token,
+        ),
+        has_console,
     )
-    # 两段文案的占位符不同（一个要 cmd、一个不要），多传的会被 format 忽略
-    say(t(key, flag=flag, cmd=command_name()), has_console)
     return EXIT_BAD_USAGE
 
 

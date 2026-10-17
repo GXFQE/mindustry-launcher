@@ -16,6 +16,7 @@ from typing import Any
 from . import gamecmd
 from .cli import CliRequest, EXIT_OK
 from .config import ConfigManager
+from . import applock
 from .extensions import ExtensionRegistry
 from .gamelog import GameLog
 from .i18n import apply_setting, t
@@ -43,6 +44,18 @@ class CoreMixin:
         """
         self.base_dir = BASE_DIR
         self.config_file = self.base_dir / "config.json"
+        # ★ 「本进程正在运行」的旗子（见 applock.py）：命令行 ``--set`` 靠它
+        #   判断启动器是不是开着 —— 开着就不许改，因为下面 on_closing 那次
+        #   config.save() 会用内存里的旧配置把命令行刚写的整个盖回去。
+        #   ★ 拿不到只记日志、**不影响启动**：多个启动器同时开本来是允许的
+        #     （虽然不推荐），没必要为此拒绝启动；真的同时改设置时，后关的
+        #     那个实例会赢 —— 和加锁之前一样，至少没有变差。
+        self.app_lock = applock.acquire(self.base_dir)
+        if not self.app_lock.held:
+            logger.warning(
+                "已有另一份启动器在运行（本进程不占配置锁）："
+                "两边同时改设置会互相覆盖"
+            )
         # 命令行请求（--launch）。纯数据、不碰界面，所以谁都可以提前读它。
         self.cli_request = cli_request
         # ★ 命令行用法（``--launch``，哪怕参数写坏了）：**不露窗口**。

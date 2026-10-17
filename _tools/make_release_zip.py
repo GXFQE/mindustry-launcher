@@ -392,6 +392,10 @@ the "ENGLISH" line further down.
   --export 把某个版本拼成一个能直接 java -jar 的 jar，--export-backup 把某个
   存档备份拼成一个 zip；--list-backups 列出有哪些备份（见下面那节）。
 
+· 命令行改设置
+  --get 看当前设置，--set 键=值 直接改（见下面那节）。下次启动生效；
+  启动器开着时会拒绝改，免得被它退出时那次保存盖掉。
+
 · 启动器自己会更新
   有新版本时，它会在后台悄悄下好，等你下次关掉启动器自动换上 ——
   不用再手动下载解压。只下**这一版真正变了的那几个文件**（通常就是
@@ -439,7 +443,7 @@ the "ENGLISH" line further down.
 
 退出码有意义，脚本里可以直接判断：0 正常（游戏玩完退出也算 0）、1 启动器崩了、
 2 参数写坏、3 没有这个版本或这个备份、4 版本找到了但没拉起来、
-5 导出失败（拼 jar / zip 时出错）。
+5 导出失败（拼 jar / zip 时出错）、6 改配置失败（启动器正开着 / 写不进去）。
 （--launch=<版本> 这种写法也认。）
 
 也可以给快捷方式加这个参数（双击即进游戏）。那种情况没有控制台可写，所以出
@@ -481,6 +485,27 @@ the "ENGLISH" line further down.
 
 导出是只读的：不碰你当前的存档，也不改任何设置 —— 会写存档目录的是「恢复
 备份」，不是它。
+
+
+【在控制台里改设置】
+
+不用开界面也能看和改设置（写脚本、或者懒得点的时候）：
+
+    "Mindustry启动器.exe" --get                    看全部设置（一行一项）
+    "Mindustry启动器.exe" --get language           只看一项
+    "Mindustry启动器.exe" --set max_log_files=10   改一项
+    "Mindustry启动器.exe" --set language=en_US auto_update=false   改几项
+
+--get 打出来的写法可以直接抄给 --set（比如 profile.默认.max_backups）。
+值写错会报错、不会悄悄按默认值存；**任何一项写错，整批都不改**。
+启动器正开着的时候会被拒绝（退出码 6）—— 它退出时会用内存里的旧配置整个写回，
+这次改动会被盖掉，先关掉再改。改完**下次启动才生效**。
+带空格的整段参数要加引号，例如：
+    "Mindustry启动器.exe" --set "extra_vm_args=-Xmx4G -XX:+UseZGC"
+
+不是所有东西都开放：version_sources、github_mirror_presets 是数组，
+profile.<分类>.data_dir 改了不会搬文件（最容易误解）——这几项请改 config.json
+或者用界面。
 
 
 【设置里能改什么】
@@ -722,9 +747,10 @@ Forgot how the arguments work? Run --help: usage, exit codes and the few
 gotchas are all in there. Neither creates a window -- they don't even load the
 UI module.
 
-One thing at a time: if --help, --list and --launch are all given, only the
-first one in that order is done (a "how do I use this" question is always
-answered first; --list is read-only and comes before launching).
+One thing at a time, in this order: --help -> --list -> --list-backups ->
+--get -> --set -> --export -> --export-backup -> --launch (read-only ones come
+first; exporting comes before launching because it changes no state, while
+launching holds the save folder).
 
 Progress and results are written to the console you typed the command in: which
 version is starting, that it came up (with the time it took), that the game
@@ -749,7 +775,8 @@ appears.
 Exit codes are meaningful, so scripts can branch on them: 0 success (quitting
 the game after playing counts as success), 1 the launcher crashed, 2 bad command
 line, 3 no such version or backup, 4 the version was found but would not start,
-5 export failed (while packing the jar / zip).
+5 export failed (while packing the jar / zip), 6 changing the config failed
+(launcher running / not writable).
 (--launch=<name> works too.)
 
 A shortcut can carry the argument as well (double-click and play). There is no
@@ -795,6 +822,29 @@ the cost of a few extra seconds; java -jar and the game are unaffected.
 
 Exporting is read-only: it never touches your current saves or your settings --
 writing to the save folder is what "restore backup" does, not this.
+
+
+CHANGING SETTINGS FROM THE CONSOLE
+
+No window needed -- handy in scripts, or when you would rather not click:
+
+    "Mindustry启动器.exe" --get                    show every setting
+    "Mindustry启动器.exe" --get language           show one
+    "Mindustry启动器.exe" --set max_log_files=10   change one
+    "Mindustry启动器.exe" --set language=en_US auto_update=false   change several
+
+Whatever --get prints can be copied straight into --set (e.g.
+profile.默认.max_backups). A bad value is reported instead of quietly stored as
+the default, and if any pair is wrong, none is applied. While the launcher is
+running --set is refused (exit code 6): it writes its in-memory config back on
+exit and would overwrite the change -- close it first. Changes take effect the
+next time the launcher starts. Quote an argument that contains spaces:
+
+    "Mindustry启动器.exe" --set "extra_vm_args=-Xmx4G -XX:+UseZGC"
+
+Not everything is exposed: version_sources and github_mirror_presets are arrays,
+and profile.<name>.data_dir does not move any files (the easiest thing to
+misread) -- edit config.json or use the UI for those.
 
 
 WHAT YOU CAN CHANGE IN SETTINGS

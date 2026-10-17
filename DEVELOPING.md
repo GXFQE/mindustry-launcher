@@ -64,7 +64,7 @@ LICENSE                 Full GNU GPL-3.0 text
 ## Development workflow
 
 ```bash
-python _tools/verify/code_regression.py          # 1. Run after any code change (575 checks)
+python _tools/verify/code_regression.py          # 1. Run after any code change (614 checks)
 python _tools/verify/i18n_check.py               # 1b. After touching strings/features: language-pack and "no hardcoded strings" gate (35 checks)
 python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (164 checks, no game launched)
 python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/languages: really build windows and switch language (29 checks)
@@ -178,7 +178,7 @@ to disable extensions entirely.
 
 UI strings live in `lang/*.json`; the code only contains keys
 (`t("settings.save_return")`). As of 2026-10-05 **every module has been migrated**
-(now 29 source files, 431 keys), and the gate is a hard line: hardcoding one more UI string fails
+(now 31 source files, 453 keys), and the gate is a hard line: hardcoding one more UI string fails
 `i18n_check.py` on the spot.
 
 - **`zh_CN.json` is the reference pack**: add new strings there first, then fill in other

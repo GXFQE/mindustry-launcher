@@ -9,8 +9,8 @@
 不 import 包内模块），``_tools/verify/code_regression.py`` 直接喂列表进去
 断言，不用建窗口、不用真实数据。
 
-目前有七个开关：``--launch`` / ``--list`` / ``--help`` / ``--export`` /
-``--export-backup`` / ``--list-backups`` / ``--out``
+目前有九个开关：``--launch`` / ``--list`` / ``--help`` / ``--export`` /
+``--export-backup`` / ``--list-backups`` / ``--out`` / ``--get`` / ``--set``
 ---------------------------------------------------------------------
 ``--launch <版本>``
     让启动器**直接**启动指定版本，省掉「选中 → 点启动 → 点确认」。
@@ -24,6 +24,15 @@
 ``--list-backups``
     列出各存档分类下的备份（时间戳 + 备注），``--export-backup`` 要写的时间戳
     从这儿看。
+
+``--get [<键>]``
+    看当前设置（不带键就全列出来）。输出的写法可以**直接**拿去 ``--set``：
+    ``hide_on_launch``、``jvm.jre_path``、``profile.<分类>.max_backups``。
+
+``--set <键>=<值> [<键>=<值> …]``
+    改设置，一次可以给多项（一次读、一次写、任何一项不合格就整批不落盘）。
+    只改 ``config.json``，**下次启动启动器才生效**；启动器正开着时会拒绝改
+    —— 它退出时会用内存里的旧配置整个写回，这次改动会被静默吃掉。
 
 ``--export <版本>``
     把一个游戏版本**拼成一个 jar**（就是启动器自己启动时拼的那个，带
@@ -65,6 +74,10 @@ EXPORT_BACKUP_FLAG = "--export-backup"
 LIST_BACKUPS_FLAG = "--list-backups"
 # 导出到哪儿（文件，或已存在的目录）。
 OUT_FLAG = "--out"
+# 看当前设置（可带一个键）。
+GET_FLAG = "--get"
+# 改设置（一个或多个 键=值；只写 config.json，下次启动生效）。
+SET_FLAG = "--set"
 
 # 「可用版本」列出来时最多显示几个：多了就是把整个版本列表糊进弹窗。
 AVAILABLE_LIMIT = 12
@@ -86,6 +99,9 @@ EXIT_NO_VERSION = 3
 EXIT_LAUNCH_FAILED = 4
 #: 导出失败：版本 / 备份找到了，但拼文件时出错（CAS 对象丢失、磁盘写不了）
 EXIT_EXPORT_FAILED = 5
+#: 改配置失败：启动器正开着（改动会被它退出时覆盖）、锁文件不可用、
+#: 或者写下去以后回读对不上（磁盘满 / 没权限 / 被别的程序占着）
+EXIT_CONFIG_FAILED = 6
 
 
 @dataclass(frozen=True)
@@ -110,6 +126,14 @@ class CliRequest:
     export_backup: str = ""
     #: 输出到哪儿（``--out``）；空 = 当前目录 + 默认文件名
     out: str = ""
+    #: 看设置（``--get``）
+    get_config: bool = False
+    #: ``--get`` 后面跟的那个键；空 = 全列出来
+    get_key: str = ""
+    #: ``--set`` 的 ``键=值``（原样保留，解析与校验在 ``cli_cfg`` 里）
+    set_pairs: tuple[str, ...] = ()
+    #: ``--set`` 里那个「不是 键=值」的参数（原样），用于说清楚哪里错了
+    bad_token: str = ""
     #: 写坏了的那个开关名（如 ``--export``）。只在**一个有效值都没有**时才算错
     bad_flag: str = ""
 
@@ -129,6 +153,8 @@ class CliRequest:
             or self.list_backups
             or self.export
             or self.export_profile
+            or self.get_config
+            or self.set_pairs
         )
 
     @property
@@ -149,6 +175,15 @@ class CliRequest:
         对象、115 MB 量级）。
         """
         return bool(self.export or self.export_profile)
+
+    @property
+    def cfg_only(self) -> bool:
+        """只读 / 只改配置、不启动游戏（``--get`` / ``--set``）。
+
+        和 ``info_only`` 一样在入口、``import tkinter`` 之前就分派走 ——
+        ``--set`` 要动 config.json，**绝不能**顺带建个窗口再收掉。
+        """
+        return bool(self.get_config or self.set_pairs)
 
 
 def _value_of(argv: list[str], index: int, flag: str) -> tuple[str, int]:
@@ -182,15 +217,15 @@ def parse_cli(argv: list[str]) -> CliRequest:
     认的写法两种：``--launch <值>`` 和 ``--launch=<值>``（很多工具的直觉写法）。
     重复给时取**最后一个有效值**；中间写坏过一次、但另一次给对了，按对的来。
 
-    ★ 七个开关**一次只做一件事**，优先级：
+    ★ 九个开关**一次只做一件事**，优先级：
 
-        ``--help`` → ``--list`` → ``--list-backups`` → ``--export``
-        → ``--export-backup`` → ``--launch``
+        ``--help`` → ``--list`` → ``--list-backups`` → ``--get`` → ``--set``
+        → ``--export`` → ``--export-backup`` → ``--launch``
 
-      ``--help`` 是「问怎么用」，永远先回答；两类 ``--list`` 都是**只读**的
-      （看一眼有什么，不该先动起手来）；导出排在启动前面 —— 导出不改任何
-      状态，而启动会开着游戏占住存档目录。这条规则写进了 ``--help`` 的
-      输出，不是隐藏行为。
+      ``--help`` 是「问怎么用」，永远先回答；只读的排前面（看一眼有什么，
+      不该先动起手来）；``--set`` 排在导出前面 —— 它只改一个 json，最快、
+      也不占任何目录；导出不改任何状态，而启动会开着游戏占住存档目录。
+      这条规则写进了 ``--help`` 的输出，不是隐藏行为。
     """
     # --help 永远先回答：连「别的参数写坏了」都先不管 —— 用户就是想问怎么用。
     if HELP_FLAG in argv:
@@ -201,12 +236,69 @@ def parse_cli(argv: list[str]) -> CliRequest:
     export = ""
     profile = ""
     stamp = ""
+    # --get / --set
+    get_seen = False
+    get_key = ""
+    set_pairs: list[str] = []
+    bad_token = ""
     # 写坏了的开关名（记住第一个就够，提示一次即可）
     broken = ""
 
     i = 0
     while i < len(argv):
         arg = argv[i]
+
+        # --get 可以带一个键（--get / --get language / --get=language）。
+        # ★ 不带键时**不能**把后面的开关当成键（--get --list 里的 --list 不是键）。
+        if arg == GET_FLAG or arg.startswith(GET_FLAG + "="):
+            get_seen = True
+            if arg.startswith(GET_FLAG + "="):
+                value = arg[len(GET_FLAG) + 1:].strip()
+                if value:
+                    get_key = value
+                i += 1
+                continue
+            nxt = argv[i + 1] if i + 1 < len(argv) else ""
+            if nxt and not nxt.startswith("-") and nxt.strip():
+                get_key = nxt.strip()
+                i += 2
+            else:
+                i += 1
+            continue
+
+        # --set 吃掉后面所有「键=值」，直到遇到下一个开关。
+        # ★ 遇到不含等号的参数**记下来**、并且**不当成别的东西**：那多半是
+        #   带空格的参数没加引号（--set "extra_vm_args=-Xmx4G -XX:+UseZGC"
+        #   忘了引号 → 第二个词到这里），悄悄忽略掉一半比报错危险得多。
+        if arg == SET_FLAG or arg.startswith(SET_FLAG + "="):
+            if arg.startswith(SET_FLAG + "="):
+                single = arg[len(SET_FLAG) + 1:].strip()
+                if single and "=" in single and single.split("=", 1)[0].strip():
+                    set_pairs.append(single)
+                elif single:
+                    bad_token = bad_token or single
+                else:
+                    broken = broken or SET_FLAG
+                i += 1
+                continue
+            eaten = 0
+            j = i + 1
+            while j < len(argv):
+                token = argv[j]
+                if token.startswith("--"):
+                    break
+                head = token.split("=", 1)[0].strip()
+                if "=" in token and head:
+                    set_pairs.append(token)
+                elif token.strip():
+                    bad_token = bad_token or token
+                    break
+                j += 1
+                eaten += 1
+            if not eaten:
+                broken = broken or SET_FLAG
+            i += 1 + eaten
+            continue
 
         # ⚠️ --export 与 --export-backup 是两个独立开关。用 _value_of 按
         #    「整串相等」或「--flag= 前缀」匹配，--export-backup 不会被
@@ -269,6 +361,16 @@ def parse_cli(argv: list[str]) -> CliRequest:
         return CliRequest(list_versions=True)
     if LIST_BACKUPS_FLAG in argv:
         return CliRequest(list_backups=True)
+    # ★ 写坏的 --set 参数**先答复**（哪怕同时给了 --get）：只做一半、剩下的
+    #   悄悄丢掉，比报错危险得多 —— 用户会以为那几项也改成了。
+    if bad_token:
+        return CliRequest(
+            bad_usage=True, bad_flag=SET_FLAG, bad_token=bad_token
+        )
+    if get_seen:
+        return CliRequest(get_config=True, get_key=get_key)
+    if set_pairs:
+        return CliRequest(set_pairs=tuple(set_pairs))
     if export:
         return CliRequest(export=export, out=out)
     if profile:

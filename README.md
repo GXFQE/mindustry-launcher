@@ -1,258 +1,211 @@
-# Mindustry Launcher
+English · [简体中文](README.zh_CN.md)
 
-[简体中文](README.zh_CN.md) · **English**
+# Mindustry Launcher — a multi-version manager for Mindustry on Windows
 
-Run several Mindustry versions side by side, keep each one's saves separate, and back
-them up automatically. tkinter GUI, **Java bundled** — no Python, no separate Java install.
+The official desktop build of Mindustry ships as a plain jar: to keep several versions you build your
+own folders, remember which jar is which, and type `java -jar` every time. Worse, **every version
+shares one data set** — saves / maps / blueprints / mods / settings under `%APPDATA%\Mindustry`. Play
+in any version and the progress lands in the same place; two save sets mean moving directories by hand.
 
-> This is the English translation. The original is the Chinese
-> [README.zh_CN.md](README.zh_CN.md) — if the two ever disagree, the Chinese one wins.
+This launcher separates the two: versions sit side by side and launch with one click; each **save
+profile** is a whole data directory of its own; backups run on your terms after you quit. tkinter GUI,
+**Java bundled** — no Python, no separate Java install.
 
----
+## What it solves
 
-## Download and run
+| Managing jars and the official data directory yourself | With this launcher |
+|---|---|
+| Several versions means folders you build, jars you have to tell apart, and `java -jar` by hand — with quotes when the path has spaces | One row per version; select it and press **Launch**. Files are assembled in the background while the window is open, so the click does not wait |
+| Every version shares `%APPDATA%\Mindustry`, so switching versions pushes the old progress aside | **Save profiles**: one profile is one full data directory (saves / maps / blueprints / mods / settings). Switch before launching and they never touch each other |
+| A second version costs a full extra copy (about 110 MB each) | Version files are split by content and **identical pieces are stored once**; a new version only adds what actually differs |
+| Backing up means copying the whole data directory, and a week later you cannot tell the copies apart | **Automatic backups** after you quit (default: 20 minutes played, keep 20), with notes and one-click restore; backups deduplicate too, so keeping more does not multiply the space |
+| Updating means browsing GitHub releases and picking a file, and a flaky connection kills the download | **Check for updates** downloads from a **source table** (Mindustry / MindustryX built in, you can add your own), with mirrors, a speed test and **resumable downloads** |
+| You must install a matching Java first, or the game will not start | **JRE bundled**; a JDK of your own works too — configured path → `jre\` next to the exe → system `JAVA_HOME` / `PATH`, in that order |
+| All you get is the game's own log, written under `%APPDATA%` — gone once you switch profiles | Game output is captured and kept per profile; the log window separates **launcher log** and **game output** |
+| Launching from a script, a batch file or a shortcut still means opening the launcher first | `--launch "version"` goes straight in with **no window at all**; `--export` packs a version into a portable jar |
+| A deleted save or an old log is gone for good | Deletions go to the **Recycle Bin** (settings can make them permanent) |
+| A new launcher build means downloading and reinstalling by hand | Downloaded in the background and swapped in when you close it; **only program files are replaced** — never versions, backups or settings |
 
-Get a package from [Releases](../../releases/latest), extract it somewhere you have
-**write permission** (not `C:\Program Files`, not the Desktop), and double-click
-`Mindustry启动器.exe`.
+**How it works**: each version is split into many small file pieces (identical pieces stored once) and
+assembled into a runtime jar before launch; save isolation works by pointing the game's **data
+directory** at that profile's folder. The game itself, the save format and the mod ecosystem are
+untouched — the launcher only assembles files, starts the process and manages backups.
 
-There is no game version on first run: click **Check for updates** to download one,
-then select it in the list and click **Launch**.
+## Getting started
 
-`使用说明.txt` inside the package covers the same ground, and is bilingual:
-Chinese in the first half, English in the second.
+1. **Download** — grab a package from [Releases](../../releases/latest), extract it somewhere you have
+   **write permission** (not `C:\Program Files`, not the Desktop), and double-click
+   `Mindustry启动器.exe`. `使用说明.txt` inside the package is a step-by-step version of the same
+   story, bilingual: Chinese in the first half, English in the second.
 
-## What it does
+2. **Get one version in** — there is no version on first run; pick one of the two:
+   - press **Check for updates** to download one (it goes through GitHub; set a mirror in Settings if
+     that is slow);
+   - press **Manage versions → Import version** and pick a `desktop.jar` someone gave you, then fill
+     in the version type and number.
 
-- **Several versions at once** — identical files are stored only once, so a second
-  version does not cost you a full extra copy.
-- **Version management** — import a local jar someone gave you (pick the `desktop.jar`);
-  rename or delete versions you no longer play. All of it lives under
-  **"管理版本" (Manage versions)**.
-- **Save profiles** — each profile gets a completely separate game data directory.
-  Switch profile, and the game reads a different set of saves. Each profile has its
-  own data directory, minimum play time, and backup count.
-- **Automatic backups** — runs after you quit the game, under the conditions you set
-  (by default: at least 20 minutes played, keep the newest 20).
-- **Update checking** — downloads game versions for you. If GitHub is slow where you
-  are, set a mirror in Settings. A download that dies halfway resumes from where it
-  stopped instead of starting over.
-- **Launch pre-warming** — the selected version's files are assembled in the background
-  while the window is open, so launching is quicker.
-- **Launch from the command line** — `--launch "Mindustry v146"` in a console goes
-  straight into that version with **no launcher window at all**; `--list` shows your
-  versions and `--help` shows the usage (see below).
-- **Export from the command line** — `--export` packs a version into a jar you can run
-  with `java -jar`, and `--export-backup` packs a save backup into a zip;
-  `--list-backups` shows what backups you have.
-- **Settings from the command line** — `--get` shows the current settings and
-  `--set key=value` changes them (takes effect on the next start); it refuses while
-  the launcher is running, so its exit-time save cannot overwrite your change.
-- **Log viewer** — captures the game's output so you can read it after it exits.
+3. **Play** — select it in the list and press **Launch**. Want a second, independent save set?
+   **Manage profiles** on the main window → create one → switch to it → launch again, and the game
+   reads the other data directory.
 
-## Launching a version from the command line
+The interface **follows your system language**: 简体中文 on a Chinese system, English otherwise.
+Settings can override that, and you can drop a `lang\zh_CN.json` of your own to change strings (see
+"Things you can change without rebuilding").
 
-Pass an argument from a console (cmd, PowerShell, Windows Terminal) and it goes straight
-into that version. **The launcher window never appears** — all you see is the game:
+## What it can do
 
-```
+### Versions
+
+- One row per version (`Mindustry v146`, `BE v146` …); select one and press **Launch**
+- **Manage versions**: import a local jar (pick `desktop.jar`), rename the version number, delete
+- **Identical files are stored once**: a second version normally adds only what actually differs
+- **Launch pre-warming**: the selected version is assembled into a runtime jar in the background as
+  soon as the window opens, so pressing Launch does not wait
+- While the game runs, changing versions / switching profiles / opening settings is refused — nothing
+  may touch files the game is reading
+
+### Save profiles
+
+- One profile = one full data directory: saves / maps / blueprints / mods / settings
+- Switch from the dropdown at the top of the main window; **Manage profiles** creates, renames,
+  deletes and opens directories
+- Per-profile settings: data directory, automatic backup on/off, minimum play time (1–60 minutes),
+  maximum backup count (1–50)
+- ⚠️ Changing the data directory only changes **which directory is used from now on** — existing saves
+  are not moved for you
+- ⚠️ Switching profiles only affects the **next launch**; it is refused while the game runs
+
+### Backups and restore
+
+- **Back up now** for a manual copy; after you quit, a backup runs under the current profile's policy
+  (default: 20 minutes played, keep 20)
+- Backups are isolated per profile, and each one can carry a note so you know which session it was
+- Restoring asks first (it overwrites that profile's current saves) and is refused while the game runs
+- Backups deduplicate by content, so keeping more does not multiply the space; past the limit the
+  oldest go first
+- Over-limit automatic cleanup and the file pieces no longer referenced by any version delete for
+  real — "delete to the Recycle Bin" only protects user files such as the save directory and old logs
+
+### Update checks and mirrors
+
+- "Where versions come from" is **one table**: Mindustry and MindustryX are built in; the
+  `version_sources` array in `config.json` adds more, and reusing a built-in `type` **overrides** it
+  (for example, your own mirror repository)
+- Only the matching asset is picked (`asset_pattern`, a regex); stable and pre-release can be filtered
+- An empty mirror means a direct GitHub connection; the dropdown lists a few common mirrors and you can
+  type your own; a source that stalls hands over to the next one automatically
+- **Speed test**: really downloads a small range from every candidate (direct connection included) and
+  ranks them (1–3 rounds); **Use the fastest** fills the setting back in
+- **Resumable downloads**: a download that dies (flaky network, launcher closed, mirror switched)
+  continues from what is already on disk instead of starting over
+- Finished files are checked for size / checksum before entering the version store
+
+### Command line
+
+Everything the GUI does has a console counterpart — handy in scripts, or when you would rather not
+open a window at all:
+
+| Switch | What it does |
+|---|---|
+| (no argument) | Open the launcher window |
+| `--launch <version>` | Launch that version with **no launcher window at all**; the launcher exits by itself when the game does |
+| `--list` | List the versions on this machine (starts nothing, does not even load the UI modules) |
+| `--list-backups` | List save backups per profile (timestamp + note) |
+| `--get [key]` | Show settings; without a key, list them all — the output can be pasted straight into `--set` |
+| `--set key=value …` | Change settings (writes `config.json` only, effective on the next start; several at once) |
+| `--export <version>` | Pack a version into a jar you can run with `java -jar`; accepts `--out` |
+| `--export-backup <profile> [timestamp]` | Pack one backup into a zip (omitting the timestamp means the newest); accepts `--out` |
+| `--help` | Usage, exit codes and a few caveats |
+
+```bat
 "Mindustry启动器.exe" --launch "Mindustry v146"
-```
-
-- The version name is the line shown in the main window's list (`Mindustry v146`,
-  `BE v146`, ...). You can also pass just the version number (`v146`) — as long as only
-  one type has it; if several do, the launcher asks you to spell out the full name
-  instead of guessing.
-- Can't remember the name? List them first:
-
-  ```
-  "Mindustry启动器.exe" --list
-  ```
-
-  It prints the versions on this machine, one per line (and launches nothing). Forgot
-  how the arguments work? Run `--help`: usage, exit codes and the few gotchas are all
-  in there. Neither of them creates a window — they don't even load the UI module.
-- **One thing at a time**, in this order: `--help` → `--list` → `--list-backups`
-  → `--get` → `--set` → `--export` → `--export-backup` → `--launch` (read-only ones
-  come first; exporting comes before launching because it changes no state, while
-  launching holds the save folder).
-- Progress and results are written to **the console you typed the command in**: which
-  version is starting, that it came up (with the time it took), that the game exited
-  (with how long you played), and whether this session was backed up.
-- When the game exits, the launcher **exits on its own** — the "close the launcher after
-  the game exits" setting does not apply here, because this form has neither a window nor
-  a tray icon, so there would be no way to close it. The automatic backup still runs,
-  under the rules of the profile you were playing in.
-- When it finishes, the **last line** in the console is `Launcher exited (exit code N)` —
-  **that line is the "finished" signal** (cmd does **not wait** for windowed programs: the
-  prompt comes back the moment you press Enter, *before* the program's output; so no new
-  prompt appears when it finishes — trust that line). Prefer the
-  "prompt-returns-only-when-done" feel? Put the command in a `.bat` (cmd waits in
-  scripts), or prefix it with `start /wait`.
-- A wrong name — or a `--launch` with no name after it — launches **nothing**: the
-  console explains why (listing your versions when the name was wrong) and no extra
-  window appears.
-- Exit codes are meaningful, so scripts can branch on them: `0` success (quitting the
-  game after playing counts as success), `1` the launcher crashed, `2` bad command line,
-  `3` no such version or backup, `4` the version was found but would not start,
-  `5` export failed (while packing the jar / zip), `6` changing the config failed
-  (launcher running / not writable).
-  `--launch=<name>` works too, and the console you pressed Enter in is the one used.
-
-★ A shortcut can carry the argument as well (double-click and play). There is no console
-to write to in that case, so problems fall back to a dialog box — run it from a console
-and every message stays in that console.
-
-## Exporting a version / a save backup
-
-Both run from a console and **never launch the game or open the launcher window**:
-
-```
-:: pack a game version into a jar -- runs with java -jar on any machine
-"Mindustry启动器.exe" --export "Mindustry v146"
-
-:: pack a save backup into a zip -- leaving the timestamp out takes the newest one
-"Mindustry启动器.exe" --export-backup 默认
-"Mindustry启动器.exe" --export-backup 默认 2026-09-20_16-35-32
-```
-
-- Not sure which backups you have? List them first:
-  ```
-  "Mindustry启动器.exe" --list-backups
-  ```
-  It groups them by profile, one line per "timestamp + note". That timestamp is exactly
-  what `--export-backup` wants (leaving it out means the newest one in that profile).
-- The file goes into the **current directory** by default, named
-  `type_version.jar` / `profile_timestamp.zip`. To put it elsewhere add `--out` (a file
-  path, or an **existing directory**):
-  ```
-  "Mindustry启动器.exe" --export "Mindustry v146" --out D:\share\
-  ```
-- **Nothing is ever overwritten**: if the name is already taken it becomes
-  `..._2.jar`, `..._3.jar`, and so on.
-- The exported jar keeps the original `Main-Class`, so `java -jar` just works; the
-  exported zip unzips straight into the contents of a save folder (copy it in and play).
-- The exported jar **is compressed**: roughly 120 MB → 87 MB for a typical version,
-  at the cost of a few extra seconds; `java -jar` and the game are unaffected.
-- Exporting is **read-only**: it never touches your current saves or your settings —
-  writing to the save folder is what "restore backup" does, not this.
-
-## Changing settings from the console
-
-Everything the Settings page can change is available from the console too — handy in
-scripts, or when you would rather not open the window:
-
-```
-:: show every setting (one per line: key = value  # description; defaults marked)
-"Mindustry启动器.exe" --get
-
-:: show a single one
-"Mindustry启动器.exe" --get language
-
-:: change one or several (one read, one write; if any pair is wrong, none is applied)
-"Mindustry启动器.exe" --set max_log_files=10
+"Mindustry启动器.exe" --export "Mindustry v146" --out D:\share\
 "Mindustry启动器.exe" --set language=en_US auto_update=false
 ```
 
-- Whatever `--get` prints can be copied **straight** into `--set`: `hide_on_launch`,
-  `jvm.jre_path`, `profile.默认.max_backups`. Replace the profile name with your own
-  (the ones on the Settings page).
-- A bad value is **reported** rather than quietly stored as the default: numbers have
-  ranges (mirror rounds 1~3, logs 1~200, minimum playtime 1~60, max backups 1~50),
-  the language is one of `auto` / `zh_CN` / `en_US`, and the mirror must look like an
-  address (empty = direct). **If any pair is wrong, none is applied** — no half-done
-  changes.
-- It is **refused while the launcher is running** (exit code `6`): the launcher writes
-  its in-memory config back on exit and would overwrite the change — close it first.
-  "Save and go back" in the UI does not have this problem.
-- Changes take effect **the next time the launcher starts** (language, mirror and JVM
-  arguments are read once at startup).
-- Quote an argument that contains spaces (otherwise cmd splits it in two and the second
-  part is reported as "not key=value"):
-  ```
-  "Mindustry启动器.exe" --set "extra_vm_args=-Xmx4G -XX:+UseZGC"
-  ```
-- Not everything is exposed: `version_sources` and `github_mirror_presets` are arrays,
-  and `profile.<name>.data_dir` does **not** move any files (the easiest thing to
-  misread) — edit `config.json` or use the UI for those.
+- **One task per run**, priority: `--help` → `--list` → `--list-backups` → `--get` → `--set` →
+  `--export` → `--export-backup` → `--launch` (read-only first; export before launch)
+- **No window**: nothing appears on screen; progress and results go to the console you typed in. A
+  mistyped name or a half-written argument **starts nothing** and says why
+- ⚠️ cmd does **not wait** for a windowed program — the prompt returns immediately, even before the
+  output. Treat the **last line**, `启动器已退出（退出码 N）`, as the "finished" signal. To get the
+  "prompt after it finishes" feel, put the command in a `.bat` or prefix it with `start /wait`
+- Exit codes: `0` OK (a finished game counts) · `1` the launcher crashed · `2` bad arguments ·
+  `3` no such version or backup · `4` version found but the game did not start · `5` export failed ·
+  `6` could not write the config (launcher is running / disk refused)
+- Exports never overwrite: an existing name becomes `..._2.jar`. The exported jar is compressed
+  (about 120 MB → 87 MB) and keeps the original `Main-Class`, so it runs as-is
 
-## Where your data lives
+### Java and launch arguments
 
-Everything sits next to the exe — copy the whole folder and it all comes with you.
+- Double-click and go: `jre\` ships with the package
+- **Java path** takes the **root** of a JRE or JDK (the folder containing `bin\java.exe`); write just
+  `jre` for the bundled one. The **Detect** button looks for one
+- Fallback order: the configured path → the bundled `jre\` → system `JAVA_HOME` / `PATH` → an error.
+  A system Java found that way is used **for that launch only** and is never written into your settings
+- **Extra JVM arguments** go before `-cp` (e.g. `-Xmx4G`); **extra game arguments** go after the main
+  class and are rarely needed
+- Quote any argument containing a space: `-Dfoo="bar baz"`
+
+### Logs
+
+- Game output is shown live and stays readable afterwards; `logs\` keeps one file per launch (can be
+  turned off in settings)
+- Two sections: **game output** and **launcher log**; copy them or open the folder
+- Retention is 1–200 files, oldest dropped first
+- The launcher's own log is `launcher.log` — the first thing to read when something goes wrong
+
+### Where the data lives
+
+Everything sits next to the exe; copy the folder and it all comes along:
 
 ```
-versions\       downloaded game versions (deduplicated)
-Backups\        save backups
-logs\           game output logs (one per launch; can be turned off)
-extensions\     your own extensions (optional, see below; a missing folder is fine)
-lang\           interface text you override yourself (optional, see below)
+versions\       game versions (identical files stored once)
+Backups\        save backups (per profile, deduplicated)
+logs\           game output, one file per launch
+runtime\        the game process's working directory (the game writes its cache here; leave it alone)
+extensions\     your own extensions (optional; the launcher runs fine without it)
+lang\           your own interface strings (optional)
 config.json     your settings
-launcher.log    the launcher's own log — look here first when something goes wrong
+launcher.log    the launcher's own log
 ```
 
-## Settings worth knowing
+### Settings worth knowing
 
-- **Interface language** — `Follow system` (default), `简体中文`, `English`. The whole
-  interface switches immediately, no restart.
-- **Launcher update** — `auto` (default) quietly downloads a new launcher and swaps it
-  in when you close the launcher; `check` only tells you; `off` disables it.
-- **Java path** — point it at a JRE or JDK root, or just drop a `jre\` folder next to the
-  exe. A wrong path is safe: it falls back to the bundled Java, and if even that is
-  missing it looks in `JAVA_HOME` / `PATH`.
-- **GitHub mirror** — leave blank to talk to GitHub directly. The **Speed test**
-  button next to it downloads a small sample through every candidate (direct
-  included) and sorts them by speed (**a progress bar shows which candidate is
-  being tested**, so it never looks stuck); **Use fastest** fills the winner back
-  into the setting. Line quality varies by ISP and region, so the order of the
-  dropdown means nothing.
-- **Test rounds** — 1 to 3 (default 3). Every round tests each candidate once
-  (total samples = candidates × rounds), so more rounds = steadier ranking but
-  longer waits. Turn it down to 2 or 1 if speed matters more. It takes effect
-  the moment you hit "Test" — no need to save first; out-of-range values are
-  rejected with a prompt instead of being silently adjusted.
-- **Use GitHub CLI authentication** — off by default. If GitHub CLI (`gh`) is
-  installed and logged in, tick it and GitHub requests get authenticated: the API
-  quota rises from 60/hour (shared per IP) to 5000/hour. The token stays in memory
-  and is never written to disk; mirrors and custom sources never see it.
-- **Delete permanently** — off by default, so deletions go to the **recycle bin** and can
-  be restored. Turn it on and they are gone for good.
+- **Language** — `Follow system` (default), `简体中文`, `English`; the whole interface switches at once
+- **Launcher updates** — `Automatic` (default) downloads quietly and swaps in when you close it;
+  `Notify only` just tells you; `Disabled` turns it off
+- **GitHub mirror** — empty means a direct connection. **Speed test** really downloads a small range
+  from each candidate and ranks them; **Use the fastest** fills it back in. The dropdown order is not
+  your speed — measure once
+- **Test rounds** — 1–3 (default 3): more rounds rank more reliably and take longer. Out-of-range
+  values are reported, never clamped
+- **Use GitHub CLI authentication** — off by default. If `gh` is installed and logged in, this raises
+  the API quota from 60 to 5000 requests per hour. The token stays in memory, is never written to disk,
+  and is not sent to mirrors or custom sources
+- **Delete files permanently** — off by default, so deletions go to the Recycle Bin; once on, they are
+  gone for good
+- **Hide the window on launch / close the launcher when the game exits** — turn both on for a
+  "click once, then only the game" feel
 
-⚠️ Click **Save and return** at the bottom right, or your changes are not applied.
+⚠️ Settings apply only after **Save and go back**.
 
-## Tweaking it without rebuilding
+### Things you can change without rebuilding
 
-Everything below is either "drop a file next to the exe" or "hand-edit `config.json`".
-Restart the launcher and it takes effect — no repackaging, no programming required.
+Add files next to the exe or edit `config.json`, then restart — no rebuild, no programming:
 
-- **Interface text / another language** — create a `lang\` folder next to the exe and drop
-  in a JSON file **named like the built-in one** (`zh_CN.json` / `en_US.json`). **The
-  outside copy wins.** This is how you reword things or add a language. Worst case if you
-  break it: a few labels show up as setting names (e.g. `settings.save_return`); the
-  launcher still opens. Delete your copy and it goes back to normal.
-- **More places to download game versions from** — the sources are a table
-  (the `version_sources` array in `config.json`). Two are built in; you can add more, and
-  a `type` that collides with a built-in **overrides** it (e.g. point the built-in
-  Mindustry entry at your own mirror). No code change, no repackaging. Field meanings are
-  in `launcher/sources.py`. The two built-ins look like this — copy the shape:
-
-  ```json
-  "version_sources": [
-    { "type": "MindustryX",  "api_url": "https://api.github.com/repos/TinyLake/MindustryX/releases",
-      "asset_pattern": "Desktop\\.jar$", "prerelease": false, "sort_rank": 0 },
-    { "type": "Mindustry",   "api_url": "https://api.github.com/repos/Anuken/Mindustry/releases",
-      "asset_pattern": "Mindustry.jar", "prerelease": null, "sort_rank": 1 }
-  ]
-  ```
-
-  Only `type` and `api_url` are required. Optional: `asset_pattern` (regex picking which
-  file to take), `prerelease` (`true` / `false` / `null` = both stable and pre-releases),
-  `use_mirror` (`false` = this source skips the mirror), `sort_rank` (lower sorts first).
-  A broken entry does not invalidate your config — it is dropped and logged.
-- **The mirror dropdown itself** — the `github_mirror_presets` array in `config.json`.
-  Whatever you put there shows up in the **GitHub mirror** dropdown in Settings.
-- **Your own feature** — create an `extensions\` folder in the data root and drop `.py`
-  files in it (each needs a `register(api)`); they load at startup. Four hooks:
-  `on_config_loaded` / `on_versions_refreshed` / `on_before_launch` / `on_game_exited`.
+- **Interface text / another language** — create a `lang\` folder and drop in a JSON with the same
+  name as the built-in one (`zh_CN.json` / `en_US.json`); **the external file wins**. The worst case is
+  a few labels showing their key (such as `settings.save_return`); delete the file and it is back to
+  normal
+- **More version sources** — the `version_sources` array; only `type` and `api_url` are required, and
+  `asset_pattern` / `prerelease` / `use_mirror` / `sort_rank` are optional. A broken entry is dropped
+  with a log line instead of invalidating the rest. Field meanings: `launcher/sources.py`
+- **The mirror dropdown** — the `github_mirror_presets` array; whatever you put there shows up in
+  Settings
+- **Add a feature** — create `extensions\` under the data root and drop in `.py` files (each needs
+  `register(api)`); they load at startup. Four hooks: `on_config_loaded` / `on_versions_refreshed` /
+  `on_before_launch` / `on_game_exited`
 
   ```python
   # extensions\my_stats.py
@@ -260,31 +213,51 @@ Restart the launcher and it takes effect — no repackaging, no programming requ
       api.on("on_game_exited", lambda **kw: print(kw["version_name"], kw["playtime_minutes"]))
   ```
 
-  ⚠️ Extension code runs with the **same privileges** as the launcher — only use files you
-  wrote or trust. If you suspect an extension is causing trouble, set the environment
-  variable `MDT_NO_EXTENSIONS=1` to disable all of them.
+  ⚠️ Extensions run with the **same privileges** as the launcher — only use ones you wrote or trust.
+  If you suspect an extension, set `MDT_NO_EXTENSIONS=1` to disable them all
 
-⚠️ **Close the launcher before hand-editing `config.json`** — it rewrites the whole file on
-exit and will overwrite what you typed. Breaking it is not fatal: unknown keys are kept
-as-is, bad values fall back to their default, and a line is written to `launcher.log`. Your
-config is never thrown away as "corrupt".
+⚠️ Close the launcher before editing `config.json` by hand — it rewrites the whole file on exit. A bad
+edit is not fatal: unknown keys are preserved and bad values fall back to their defaults with the key
+named in `launcher.log`.
+
+## Not there yet
+
+- **macOS / Linux** — Windows only for now (an exe plus a bundled Windows JRE)
+- **The command line stops at launch / list / export / settings** — there is no `--version`, and
+  `--launch` uses the **current** save profile rather than one you name
+- **No dedicated mod / map / blueprint pages** — isolation works on the whole data directory, so those
+  follow the profile, but listing, importing and dependency checks are left to the game
+- **No extension distribution** — `extensions\` holds local `.py` files; write your own or have someone
+  send you one
+
+## Deliberately out of scope
+
+- **Bundling or redistributing the game** — the copyright belongs to its authors; versions always come
+  from the official release pages (or a source you configure)
+- **Modifying the game** — no injection, no patches, no changes to the game's own files; official
+  files are only assembled as they are into a runnable jar and started
+- **Multithreaded downloads** — a single stream is enough, and the effort is better spent on resumable
+  downloads and switching sources
 
 ## Notes
 
-- **Your antivirus may flag it** — common for PyInstaller-built executables. Add an
-  exception.
-- Updating the launcher replaces **program files only** (the exe and `_internal\`). It
-  never touches your game versions, save backups, settings, extensions, or `jre\`.
-- If update checks keep failing, you probably cannot reach GitHub. Set the
-  `MDT_SELFUPDATE_API` environment variable to a proxy that works for you.
-- When reporting a problem, include `launcher.log` — it records what the launcher did.
+- **Antivirus false positives happen** (common with PyInstaller builds) — allow the exe
+- Upgrading the launcher **only replaces program files** (the exe and `_internal\`); versions, backups,
+  settings, extensions and `jre\` are untouched
+- If **Check for updates** keeps failing, it is usually GitHub being unreachable: set a mirror, or set
+  the `MDT_SELFUPDATE_API` environment variable to a proxy that works for you
+- When reporting a problem, include `launcher.log` (plus the game output from `logs\` if relevant) —
+  every step is recorded there
 
-## Mindustry itself
+---
 
-This program does not modify or redistribute the game — it only downloads the executable
-from the official release page and launches it as a separate process.
+To **build it or change the code**, see **[DEVELOPING.md](DEVELOPING.md)** (running from source, project
+layout, verification and release process, and the reasoning behind a few design decisions).
 
-## For developers
+> This is the English translation. The original is the Chinese
+> [README.zh_CN.md](README.zh_CN.md) — if the two ever disagree, the Chinese one wins.
 
-Building from source, the project layout, the verification workflow and the release
-process live in **[DEVELOPING.md](DEVELOPING.md)**.
+## Licence
+
+Released under the **GNU General Public License v3.0**; the full text is in [LICENSE](LICENSE).
+Copyright (C) 2026 GXFQE.

@@ -5,7 +5,8 @@
 Developer documentation: how to run from source, the project layout, the verification
 workflow, the release process, and the internals behind a few design decisions.
 
-For **what the launcher does and how to use it**, see [README.md](README.md).
+For **what the launcher does and how to use it**, see [README.md](README.md); for the detailed
+user-facing reference (every switch, every setting), see [docs/USAGE.md](docs/USAGE.md).
 
 ---
 
@@ -32,6 +33,7 @@ installer does too).
 MindustryLauncher.py    Entry point (~20-line wrapper; the real code lives in launcher/)
 Launcher.spec           PyInstaller build config
 mindustry.ico           Window icon
+docs/                   Detailed user-facing reference (USAGE.md / USAGE.zh_CN.md: switches, settings)
 lang/                   UI strings (zh_CN.json / en_US.json; drop a copy next to the exe to override)
 launcher/               All source code
     version.py          ★ The single source of version numbers + compatibility constants

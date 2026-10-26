@@ -4,7 +4,8 @@
 
 面向开发者：怎么从源码跑、项目结构、验证流程、发版流程，以及几个设计决定背后的原因。
 
-**程序是做什么的、怎么用**，看 [README.zh_CN.md](README.zh_CN.md)。
+**程序是做什么的、怎么用**，看 [README.zh_CN.md](README.zh_CN.md)；命令行开关、设置逐项这些
+细节在 [docs/USAGE.zh_CN.md](docs/USAGE.zh_CN.md)。
 
 ---
 
@@ -30,6 +31,7 @@ Windows 官方安装包默认也带）。
 MindustryLauncher.py    入口（约 20 行 wrapper，真正的代码在 launcher/）
 Launcher.spec           PyInstaller 打包配置
 mindustry.ico           窗口图标
+docs/                   面向使用者的详细用法（USAGE.md / USAGE.zh_CN.md，命令行与设置逐项在这里）
 lang/                   界面文案（zh_CN.json / en_US.json，外面放一份即可覆盖）
 launcher/               全部源码
     version.py          ★ 唯一的版本号来源 + 兼容性常量（配置/清单格式版本）

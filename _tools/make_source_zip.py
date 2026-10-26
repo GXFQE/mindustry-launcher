@@ -39,6 +39,7 @@ ITEMS = [
     "README.zh_CN.md",        # 中文版（原版，两份互为译文）
     "DEVELOPING.md",          # 开发文档（英文版）
     "DEVELOPING.zh_CN.md",    # 开发文档（中文版）
+    "docs",                   # 面向使用者的详细用法（USAGE 两份）
     "LICENSE",                # 许可协议（GPL-3.0 全文）
     "MindustryLauncher.py",   # 入口
     "Launcher.spec",          # 打包配置

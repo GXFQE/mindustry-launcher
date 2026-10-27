@@ -2,6 +2,8 @@
 
 # Mindustry 启动器 —— Windows 上的多版本管理器
 
+> **找的是安卓版？** 那是另一个项目 → **[MDT 管理器（Android）](https://github.com/GXFQE/mindustry-launcher-android)**。
+
 官方的 Mindustry（像素工厂）桌面版只给 jar：想留几个版本，得自己建目录、记住哪个文件是哪个，
 每次手敲 `java -jar`。更麻烦的是**所有版本共用一份数据** —— `%APPDATA%\Mindustry` 里的
 存档 / 地图 / 蓝图 / 模组 / 设置，在哪个版本里玩都压在同一个地方。
@@ -76,6 +78,8 @@
 
 都不长，需要时翻一下：
 
+- **[FEATURE.md](FEATURE.md)** —— 22 项能力与同期 5 个桌面启动器的横向对照（判据是源码，不是各自的
+  README）；哪一项是独有、哪一项是短板、下一版补什么最值，都在里面
 - **[docs/USAGE.zh_CN.md](docs/USAGE.zh_CN.md)** —— 详细用法：命令行全部开关、设置逐项、
   数据目录布局、Java 兜底顺序、语言包 / 版本来源 / 扩展、出问题怎么排查
 - **[DEVELOPING.zh_CN.md](DEVELOPING.zh_CN.md)** —— 从源码跑、项目结构、验证与发版流程

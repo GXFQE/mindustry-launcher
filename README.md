@@ -2,6 +2,8 @@ English · [简体中文](README.zh_CN.md)
 
 # Mindustry Launcher — a multi-version manager for Mindustry on Windows
 
+> **Looking for the Android build?** That is a separate project → **[MDT Manager (Android)](https://github.com/GXFQE/mindustry-launcher-android)**.
+
 The official desktop build of Mindustry ships as a plain jar: to keep several versions you build your
 own folders, remember which jar is which, and type `java -jar` every time. Worse, **every version
 shares one data set** — saves / maps / blueprints / mods / settings under `%APPDATA%\Mindustry`.
@@ -90,6 +92,9 @@ The interface **follows your system language** (Chinese / English); settings can
 
 Short reads, when you need them:
 
+- **[FEATURE.md](FEATURE.md)** — 22 capabilities set against the five other desktop launchers of the
+  period (judged from source, not from their READMEs); what is unique here, where the gaps are, and
+  what is worth building next
 - **[docs/USAGE.md](docs/USAGE.md)** — every command-line switch, each setting, the data layout, the
   Java fallback order, language packs / version sources / extensions, and troubleshooting
 - **[DEVELOPING.md](DEVELOPING.md)** — running from source, project layout, verification and release

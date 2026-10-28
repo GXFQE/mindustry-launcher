@@ -9,10 +9,11 @@
 不 import 包内模块），``_tools/verify/code_regression.py`` 直接喂列表进去
 断言，不用建窗口、不用真实数据。
 
-目前有十五个开关（其中 ``--out`` / ``--yes`` / ``--as`` / ``--type`` 是修饰词）：
+目前有十七个开关（其中 ``--out`` / ``--yes`` / ``--as`` / ``--type`` 是修饰词）：
 ``--launch`` / ``--list`` / ``--help`` / ``--export`` / ``--export-backup`` /
 ``--list-backups`` / ``--out`` / ``--get`` / ``--set`` / ``--import`` /
-``--as`` / ``--type`` / ``--delete-version`` / ``--delete-backup`` / ``--yes``
+``--as`` / ``--type`` / ``--restore-backup`` / ``--delete-version`` /
+``--delete-backup`` / ``--check-updates`` / ``--yes``
 ---------------------------------------------------------------------
 ``--launch <版本>``
     让启动器**直接**启动指定版本，省掉「选中 → 点启动 → 点确认」。
@@ -26,6 +27,15 @@
 ``--list-backups``
     列出各存档分类下的备份（时间戳 + 备注），``--export-backup`` 要写的时间戳
     从这儿看。
+
+``--check-updates``
+    检查有没有**新的游戏版本**（就是界面「检查更新」那个按钮），只查不下载。
+    ★ 只查不下载是故意的：命令行里下一个 100+ MB 的包、还没有进度条，出了
+      问题只能看日志；要下载就开界面，或者让启动器启动时自己检查（它发现
+      新版本会直接下）。
+    ★ 发现新版本时退出码是 10（**不是错误**，是「有话要说」），脚本里靠它
+      判断要不要提醒；查询本身失败才是 11。
+    ★ 只管游戏版本，不管启动器自身更新（那是另一套，见 ``selfupdate``）。
 
 ``--get [<键>]``
     看当前设置（不带键就全列出来）。输出的写法可以**直接**拿去 ``--set``：
@@ -61,18 +71,30 @@
     ``--import`` 导入成什么版本类型，默认 ``Mindustry``（另一个常见的是
     ``MindustryX``）。修饰词；只在导入时用得上。
 
+``--restore-backup <分类> [<时间戳>]``
+    把一条存档备份**恢复进该分类的存档目录**（就是界面「管理备份 → 恢复
+    备份」）。省略时间戳 = 该分类最新那个。**必须带 ``--yes``**：这会覆盖
+    当前存档。
+    ★ 底层有退路：恢复前先把当前存档打成 ``rollback_*.zip``，快照建不成功
+      就直接中止（一个文件都不删）；清空旧内容走回收站（除非设置里开了
+      ``permanent_delete``）。这两条都是界面那条路原有的保证，命令行原样
+      复用，没有另写一套。
+    ★ 只动**这一个分类**的存档目录，不碰版本库、不碰别的分类。
+
 ``--delete-version <版本>``
     删掉一个游戏版本（只删清单；没人引用的对象随后回收）。不可逆。
 
 ``--delete-backup <分类> [<时间戳>]``
     删掉一个存档备份。省略时间戳 = 该分类最新那个。不可逆。
     ★ 和 ``--export-backup`` 一样，只动备份清单，**不碰存档目录**。
-    ★ 两个删除开关不能同时给（``--delete-version`` + ``--delete-backup``）：
-      只做一个等于悄悄丢掉一半，所以那种写法按参数写坏处理，什么都不删。
+    ★ 会改数据的目标不能同时给（``--delete-version`` / ``--delete-backup`` /
+      ``--restore-backup`` 里任意两个）：只做一个等于悄悄丢掉一半，所以那种
+      写法按参数写坏处理，什么都不做。
 
 ``--yes``
-    确认执行删除。**删除必须带它**：命令行没有「你确定吗」那一下，漏写就
-    按参数写坏处理（退出码 2），一个字节都不动。修饰词，单独给不起作用。
+    确认执行**会改数据**的操作（删除 / 恢复备份）。**这两类必须带它**：
+    命令行没有「你确定吗」那一下，漏写就按参数写坏处理（退出码 2），一个
+    字节都不动。修饰词，单独给不起作用。
 
 ``--help``
     打印用法说明。它**永远最先回答**：混着别的开关给，也只打印帮助。
@@ -100,6 +122,8 @@ EXPORT_FLAG = "--export"
 EXPORT_BACKUP_FLAG = "--export-backup"
 # 列出备份（只输出）。--export-backup 要写的时间戳从这儿看。
 LIST_BACKUPS_FLAG = "--list-backups"
+# 检查有没有新的游戏版本（只查不下载，零界面）。
+CHECK_UPDATES_FLAG = "--check-updates"
 # 导出到哪儿（文件，或已存在的目录）。
 OUT_FLAG = "--out"
 # 看当前设置（可带一个键）。
@@ -114,11 +138,13 @@ AS_FLAG = "--as"
 TYPE_FLAG = "--type"
 # 导入时没写 --type 用的类型（和界面导入对话框的默认值一致）。
 DEFAULT_VERSION_TYPE = "Mindustry"
+# 把一条存档备份恢复进存档目录（会覆盖当前存档）。不可逆，必须 --yes。
+RESTORE_BACKUP_FLAG = "--restore-backup"
 # 删掉一个游戏版本（清单 + 随后回收没人引用的对象）。不可逆。
 DELETE_VERSION_FLAG = "--delete-version"
 # 删掉一个存档备份（清单 + 随后回收没人引用的对象）。不可逆。
 DELETE_BACKUP_FLAG = "--delete-backup"
-# 删除的确认开关。★ 缺了它一律不执行（见 parse_cli 末尾）。
+# 删除 / 恢复的确认开关。★ 缺了它一律不执行（见 parse_cli 末尾）。
 YES_FLAG = "--yes"
 
 # 「可用版本」列出来时最多显示几个：多了就是把整个版本列表糊进弹窗。
@@ -150,6 +176,15 @@ EXIT_DELETE_FAILED = 7
 #: 导入失败：jar 打不开 / 不是 zip、同名版本已存在（不覆盖）、
 #: 写进去了但回读发现清单没出来。
 EXIT_IMPORT_FAILED = 8
+#: 恢复失败：备份找到了，但写回存档目录时出错（对象缺失、磁盘写不了、
+#: 回滚也失败 —— 最后那种情况 rollback 快照会留在分类目录里，是唯一退路）。
+EXIT_RESTORE_FAILED = 9
+#: 检查更新**发现有新版本**。★ 不是错误：查询本身成功了，只是「有话要说」，
+#: 脚本靠它决定要不要提醒用户（``if errorlevel 10 ...``）。
+EXIT_UPDATE_AVAILABLE = 10
+#: 检查更新失败：所有来源都查不通（断网 / 被限流 / 返回的不是 release 数组）。
+#: ★ 必须和「没有更新」分开：否则断网时脚本会读成「已是最新」，静默跳过更新。
+EXIT_UPDATE_FAILED = 11
 
 
 @dataclass(frozen=True)
@@ -166,6 +201,8 @@ class CliRequest:
     list_versions: bool = False
     #: 列出各分类下的备份（``--list-backups``）
     list_backups: bool = False
+    #: 检查有没有新的游戏版本（``--check-updates``，只查不下载）
+    check_updates: bool = False
     #: 要导出成 jar 的版本名（``--export``）；空串 = 不导出
     export: str = ""
     #: 要导出成 zip 的备份所属分类（``--export-backup``）；空串 = 不导出备份
@@ -186,6 +223,10 @@ class CliRequest:
     import_name: str = ""
     #: 导入成什么类型（``--type``）；空 = 用 ``DEFAULT_VERSION_TYPE``
     import_type: str = ""
+    #: 要恢复的备份所属分类（``--restore-backup``）；空串 = 不恢复
+    restore_profile: str = ""
+    #: 恢复哪个备份（时间戳）；空 = 该分类最新那个
+    restore_stamp: str = ""
     #: 要删除的版本名（``--delete-version``）；空串 = 不删版本
     delete_version: str = ""
     #: 要删除的备份所属分类（``--delete-backup``）；空串 = 不删备份
@@ -221,18 +262,28 @@ class CliRequest:
             or self.get_config
             or self.set_pairs
             or self.import_jar
+            or self.restore_profile
             or self.delete_version
             or self.delete_profile
+            or self.check_updates
         )
 
     @property
     def info_only(self) -> bool:
-        """只输出信息、不启动游戏（``--help`` / ``--list`` / ``--list-backups``）。
+        """只输出信息、不启动游戏（``--help`` / ``--list`` / ``--list-backups``
+        / ``--check-updates``）。
 
         入口靠它决定「**连 tkinter 都不 import**」—— 见
         ``cli_info.py`` 与 ``MindustryLauncher.main`` 里的那条分支。
+        ★ ``--check-updates`` 是这里面唯一**要联网**的（其余只读本地磁盘），
+          但它一样不写任何东西、不需要进程锁。
         """
-        return bool(self.show_help or self.list_versions or self.list_backups)
+        return bool(
+            self.show_help
+            or self.list_versions
+            or self.list_backups
+            or self.check_updates
+        )
 
     @property
     def export_only(self) -> bool:
@@ -266,6 +317,20 @@ class CliRequest:
           这里再算「要导入」只会让调用方多一条要想的分支。
         """
         return bool(self.import_jar and self.import_name)
+
+    @property
+    def restore_only(self) -> bool:
+        """只恢复一条备份、不启动游戏（``--restore-backup``）。
+
+        和 ``--delete*`` 一样在入口、``import tkinter`` 之前分派走 —— 恢复要
+        **写**存档目录（先清空、再从 CAS 池还原），绝不能顺带建个窗口再收掉。
+        它也拿同一把进程锁：启动器那个实例的自动备份 / 备份窗口正在读同一个
+        目录，撞上的结果轻则是「备份到一半」，重则是两边互相覆盖。
+
+        ★ 没带 ``--yes`` 时为假：那时 ``bad_usage`` 已经为真、入口会先答复，
+          这里再算「要恢复」只会让调用方多一条要想的分支。
+        """
+        return bool(self.restore_profile and self.confirmed)
 
     @property
     def delete_only(self) -> bool:
@@ -304,6 +369,38 @@ def _value_of(argv: list[str], index: int, flag: str) -> tuple[str, int]:
     return "", 0
 
 
+def _backup_target(
+    argv: list[str], index: int, flag: str
+) -> tuple[str, str, int, bool]:
+    """解析 ``--flag <分类> [<时间戳>]`` / ``--flag=<分类> [<时间戳>]``。
+
+    返回 ``(分类, 时间戳, 吃掉几个参数, 是否写坏)``。
+
+    ★ 三个备份开关（``--export-backup`` / ``--restore-backup`` /
+      ``--delete-backup``）的写法完全一致，所以解析只写一处。三份复制迟早会
+      走岔，而走岔的那一份会把**用户点名的时间戳当成多余参数丢掉** —— 然后
+      悄悄换成「最新那个」：导出时拿错文件，恢复时更是盖错了存档。
+    ★ 等号写法也认第二个位置参数（``--restore-backup=默认 2026-…``）：用户
+      从 ``--list-backups`` 里抄了时间戳，不该因为分类写成等号就被吃掉。
+    """
+    arg = argv[index]
+    if arg.startswith(flag + "="):
+        profile = arg[len(flag) + 1:].strip()
+        used = 1
+    else:
+        profile, used = _value_of(argv, index, flag)
+        used = used or 1
+    if not profile:
+        return "", "", used, True
+    stamp = ""
+    nxt = argv[index + used] if index + used < len(argv) else ""
+    # 跟个开关（--out / --yes）时不许把它当时间戳吞掉。
+    if nxt and not nxt.startswith("--") and nxt.strip():
+        stamp = nxt.strip()
+        used += 1
+    return profile, stamp, used, False
+
+
 def parse_cli(argv: list[str]) -> CliRequest:
     """从 ``argv`` 里挑出我们自己认识的参数。不认识的**一律忽略**。
 
@@ -314,20 +411,25 @@ def parse_cli(argv: list[str]) -> CliRequest:
     认的写法两种：``--launch <值>`` 和 ``--launch=<值>``（很多工具的直觉写法）。
     重复给时取**最后一个有效值**；中间写坏过一次、但另一次给对了，按对的来。
 
-    ★ 十五个开关**一次只做一件事**，优先级：
+    ★ 十七个开关**一次只做一件事**，优先级：
 
-        ``--help`` → ``--list`` → ``--list-backups`` → ``--get`` → ``--set``
-        → ``--export`` → ``--export-backup`` → ``--import`` →
-        ``--delete-version`` / ``--delete-backup`` → ``--launch``
+        ``--help`` → ``--list`` → ``--list-backups`` → ``--check-updates``
+        → ``--get`` → ``--set`` → ``--export`` → ``--export-backup``
+        → ``--import`` → ``--restore-backup`` → ``--delete-version`` /
+        ``--delete-backup`` → ``--launch``
 
       ``--help`` 是「问怎么用」，永远先回答；只读的排前面（看一眼有什么，
       不该先动起手来）；``--set`` 排在导出前面 —— 它只改一个 json，最快、
       也不占任何目录；导出不改任何状态，而启动会开着游戏占住存档目录。
-      ★ 导入排在导出**后面**、删除**前面**：整条顺序就是「只读 → 改配置 →
-      产出文件 → 往里加 → 往外毁 → 启动」，破坏性越大越靠后。
-      ★ 删除排在导出后面还有一层：``--export-backup X --delete-backup X``
-      于是先导出再删 —— 想「留个副本再清掉」时顺序天然是对的。启动永远最后
-      （它会占住存档目录）。
+      ★ 导入排在导出**后面**、恢复**前面**：整条顺序就是「只读 → 改配置 →
+      产出文件 → 改版本库 → 改存档 → 毁东西 → 启动」，破坏性越大越靠后。
+      ★ ``--check-updates`` 排在只读组最后：它要联网（几秒），本地那几条
+      瞬时就能答。它排在 ``--set`` 前面仍属「只读优先于写」。
+      ★ 恢复 / 删除排在导出后面还有一层：``--export-backup X --delete-backup
+      X`` 于是先导出再删 —— 想「留个副本再清掉」时顺序天然是对的。启动永远
+      最后（它会占住存档目录）。
+      ★ 恢复 / 删除 / 删版本**互斥**：三个目标里给两个以上就按参数写坏答复，
+      因为「只做第一个」等于悄悄丢掉另一半。
       这条规则写进了 ``--help`` 的输出，不是隐藏行为。
     """
     # --help 永远先回答：连「别的参数写坏了」都先不管 —— 用户就是想问怎么用。
@@ -339,10 +441,12 @@ def parse_cli(argv: list[str]) -> CliRequest:
     export = ""
     profile = ""
     stamp = ""
-    # --delete-version / --delete-backup / --yes
+    # --delete-version / --delete-backup / --restore-backup / --yes
     delete_version = ""
     delete_profile = ""
     delete_stamp = ""
+    restore_profile = ""
+    restore_stamp = ""
     confirmed = False
     # --import / --as / --type
     import_jar = ""
@@ -441,26 +545,13 @@ def parse_cli(argv: list[str]) -> CliRequest:
             continue
 
         if arg == EXPORT_BACKUP_FLAG or arg.startswith(EXPORT_BACKUP_FLAG + "="):
-            if arg.startswith(EXPORT_BACKUP_FLAG + "="):
-                value = arg[len(EXPORT_BACKUP_FLAG) + 1:].strip()
-                if value:
-                    profile = value
-                else:
-                    broken = broken or EXPORT_BACKUP_FLAG
-                i += 1
-                continue
-            # 位置写法：--export-backup <分类> [<时间戳>]
-            value, n = _value_of(argv, i, EXPORT_BACKUP_FLAG)
-            if not value:
+            value, position, n, bad = _backup_target(
+                argv, i, EXPORT_BACKUP_FLAG
+            )
+            if bad:
                 broken = broken or EXPORT_BACKUP_FLAG
-                i += n or 1
-                continue
-            profile = value
-            # 第二个位置参数才是时间戳；跟个开关（--out）时不许吞掉它。
-            nxt = argv[i + n] if i + n < len(argv) else ""
-            if nxt and not nxt.startswith("--") and nxt.strip():
-                stamp = nxt.strip()
-                n += 1
+            else:
+                profile, stamp = value, position
             i += n
             continue
 
@@ -492,6 +583,20 @@ def parse_cli(argv: list[str]) -> CliRequest:
             i += n or 1
             continue
 
+        # --restore-backup <分类> [<时间戳>]：位置写法和 --export-backup /
+        # --delete-backup 一模一样 —— 用户刚从 --list-backups 抄了时间戳，
+        # 三个开关不该长得不一样。
+        if arg == RESTORE_BACKUP_FLAG or arg.startswith(RESTORE_BACKUP_FLAG + "="):
+            value, position, n, bad = _backup_target(
+                argv, i, RESTORE_BACKUP_FLAG
+            )
+            if bad:
+                broken = broken or RESTORE_BACKUP_FLAG
+            else:
+                restore_profile, restore_stamp = value, position
+            i += n
+            continue
+
         # --delete-version <版本>：只取值，目标是否存在 / 撞名交给 cli_delete
         # （和 --launch 用同一套匹配规则，写法也一致）。
         if arg == DELETE_VERSION_FLAG or arg.startswith(DELETE_VERSION_FLAG + "="):
@@ -506,24 +611,13 @@ def parse_cli(argv: list[str]) -> CliRequest:
         # --delete-backup <分类> [<时间戳>]：位置写法跟 --export-backup 一模一样
         # —— 用户刚从 --list-backups 里抄了时间戳，两个开关不该长得不一样。
         if arg == DELETE_BACKUP_FLAG or arg.startswith(DELETE_BACKUP_FLAG + "="):
-            if arg.startswith(DELETE_BACKUP_FLAG + "="):
-                value = arg[len(DELETE_BACKUP_FLAG) + 1:].strip()
-                if value:
-                    delete_profile = value
-                else:
-                    broken = broken or DELETE_BACKUP_FLAG
-                i += 1
-                continue
-            value, n = _value_of(argv, i, DELETE_BACKUP_FLAG)
-            if not value:
+            value, position, n, bad = _backup_target(
+                argv, i, DELETE_BACKUP_FLAG
+            )
+            if bad:
                 broken = broken or DELETE_BACKUP_FLAG
-                i += n or 1
-                continue
-            delete_profile = value
-            nxt = argv[i + n] if i + n < len(argv) else ""
-            if nxt and not nxt.startswith("--") and nxt.strip():
-                delete_stamp = nxt.strip()
-                n += 1
+            else:
+                delete_profile, delete_stamp = value, position
             i += n
             continue
 
@@ -542,6 +636,10 @@ def parse_cli(argv: list[str]) -> CliRequest:
         return CliRequest(list_versions=True)
     if LIST_BACKUPS_FLAG in argv:
         return CliRequest(list_backups=True)
+    # ★ --check-updates 排在只读组最后：它要联网（每个来源最多等一个超时），
+    #   本地那几条（--list / --list-backups）瞬时就答得出来。
+    if CHECK_UPDATES_FLAG in argv:
+        return CliRequest(check_updates=True)
     # ★ 写坏的 --set 参数**先答复**（哪怕同时给了 --get）：只做一半、剩下的
     #   悄悄丢掉，比报错危险得多 —— 用户会以为那几项也改成了。
     if bad_token:
@@ -572,27 +670,53 @@ def parse_cli(argv: list[str]) -> CliRequest:
             import_name=import_name,
             import_type=import_type or DEFAULT_VERSION_TYPE,
         )
-    # ★ 删除：**没有 --yes 就一个字节都不动**，按「参数写坏」答复（退出码 2）。
-    #   命令行没有「你确定吗」那一下，把这个判断留在后面某处只会被忘掉；
-    #   放在这里意味着任何删除都必经这道闸。目标仍然原样带在请求里，
-    #   提示语才能说清楚「你要删的是什么」。
-    if delete_version or delete_profile:
-        if delete_version and delete_profile:
-            # ★ 两个删除目标同时给：只做一个等于「悄悄丢掉一半」—— 用户会以为
-            #   两样都删了。宁可报错让人分两条命令跑（和 --set「一项不合格
-            #   整批不落盘」是同一条原则）。
-            return CliRequest(
-                bad_usage=True,
-                bad_flag=DELETE_BACKUP_FLAG,
-                bad_note="cli.delete_two_targets",
-                delete_version=delete_version,
-                delete_profile=delete_profile,
-                delete_stamp=delete_stamp,
-            )
+    # ★ 会改数据的目标（恢复 / 删版本 / 删备份）：**没有 --yes 就一个字节都
+    #   不动**，按「参数写坏」答复（退出码 2）。命令行没有「你确定吗」那一下，
+    #   把这个判断留在后面某处只会被忘掉；放在这里意味着任何写操作都必经这道
+    #   闸。目标仍然原样带在请求里，提示语才能说清楚「你要动的是什么」。
+    targets = [
+        flag
+        for flag, given in (
+            (RESTORE_BACKUP_FLAG, restore_profile),
+            (DELETE_VERSION_FLAG, delete_version),
+            (DELETE_BACKUP_FLAG, delete_profile),
+        )
+        if given
+    ]
+    if len(targets) > 1:
+        # ★ 多个目标同时给：只做一个等于「悄悄丢掉一半」—— 用户会以为都做了。
+        #   宁可报错让人分几条命令跑（和 --set「一项不合格整批不落盘」、
+        #   以及「用户名撞车不猜」是同一条原则）。
+        return CliRequest(
+            bad_usage=True,
+            bad_flag=targets[1],
+            bad_note="cli.too_many_targets",
+            restore_profile=restore_profile,
+            restore_stamp=restore_stamp,
+            delete_version=delete_version,
+            delete_profile=delete_profile,
+            delete_stamp=delete_stamp,
+        )
+    if restore_profile:
         if not confirmed:
             return CliRequest(
                 bad_usage=True,
                 bad_flag=YES_FLAG,
+                bad_note="cli.bad_usage_confirm",
+                restore_profile=restore_profile,
+                restore_stamp=restore_stamp,
+            )
+        return CliRequest(
+            restore_profile=restore_profile,
+            restore_stamp=restore_stamp,
+            confirmed=True,
+        )
+    if delete_version or delete_profile:
+        if not confirmed:
+            return CliRequest(
+                bad_usage=True,
+                bad_flag=YES_FLAG,
+                bad_note="cli.bad_usage_confirm",
                 delete_version=delete_version,
                 delete_profile=delete_profile,
                 delete_stamp=delete_stamp,

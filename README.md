@@ -79,9 +79,10 @@ The interface **follows your system language** (Chinese / English); settings can
 
 ### Command line
 
-- Twelve switches: launch, list versions, list backups, read / write settings, export a jar, export a
-  backup zip, import a jar, delete a version or a backup — no window, real exit codes, friendly to
-  scripts and shortcuts. Deleting always requires `--yes` and a closed launcher
+- Seventeen switches: launch, list versions, list backups, check for updates, read / write settings,
+  export a jar, export a backup zip, import a jar, restore a backup, delete a version or a backup —
+  no window, real exit codes, friendly to scripts and shortcuts. Deleting and restoring always
+  require `--yes` and a closed launcher
 - Full switch table, exit codes and the limits of `--set`: see **[detailed usage](docs/USAGE.md#command-line)**
 
 ### Logs
@@ -106,7 +107,8 @@ Short reads, when you need them:
 - **No `--version`**, and `--launch` cannot pick a different save profile for that one run
 - **Deleting a save profile is GUI-only on purpose** — it takes three confirmations and moves the data
   directory to the recycle bin. Versions and single backups can be deleted from the console
-  (`--delete-version`, `--delete-backup`, both with `--yes`)
+  (`--delete-version`, `--delete-backup`), and a backup can be put back with `--restore-backup` — all
+  three need `--yes`
 - **No dedicated mod / map / blueprint pages** — isolation works on the whole data directory, so those
   follow the profile, but listing, importing and dependency checks are left to the game
 

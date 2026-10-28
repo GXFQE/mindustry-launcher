@@ -392,6 +392,12 @@ the "ENGLISH" line further down.
   --export 把某个版本拼成一个能直接 java -jar 的 jar，--export-backup 把某个
   存档备份拼成一个 zip；--list-backups 列出有哪些备份（见下面那节）。
 
+· 命令行导入 / 删除 / 恢复
+  --import 把一个本地 jar 收进版本库，--delete-version / --delete-backup 删掉
+  一个版本或一份备份，--restore-backup 把一份备份放回存档目录（见下面那节）。
+  后三个都会改数据，必须带 --yes；--check-updates 则只查有没有新版本、
+  不下载。
+
 · 命令行改设置
   --get 看当前设置，--set 键=值 直接改（见下面那节）。下次启动生效；
   启动器开着时会拒绝改，免得被它退出时那次保存盖掉。
@@ -423,8 +429,11 @@ the "ENGLISH" line further down.
 --help：用法、退出码、几个注意点都在里面。这两个也都不建窗口 —— 它们连
 界面模块都不加载。
 
-三个参数一次只做一件事：同时给了 --help、--list、--launch，按这个顺序
-只做第一个（问「怎么用」永远先回答；--list 只读，排在启动前面）。
+一次只做一件事，优先级：--help → --list → --list-backups → --check-updates →
+--get → --set → --export → --export-backup → --import → --restore-backup →
+--delete-version / --delete-backup → --launch（只读的先答、联网那条排在本地
+那几条后面；导出排在启动前面 —— 它不改状态，而启动会占住存档目录；
+往里写总比往外毁温和）。
 
 进度和结果都写在你敲命令的那个控制台里：正在启动哪个版本、起来了（带耗时）、
 游戏退出（带玩了多久）、这一局有没有自动备份。
@@ -443,7 +452,9 @@ the "ENGLISH" line further down.
 
 退出码有意义，脚本里可以直接判断：0 正常（游戏玩完退出也算 0）、1 启动器崩了、
 2 参数写坏、3 没有这个版本或这个备份、4 版本找到了但没拉起来、
-5 导出失败（拼 jar / zip 时出错）、6 改配置失败（启动器正开着 / 写不进去）。
+5 导出失败（拼 jar / zip 时出错）、6 改配置失败（启动器正开着 / 写不进去）、
+7 删除失败、8 导入失败（jar 打不开 / 同名已存在）、9 恢复失败、
+10 检查更新发现了新版本（不是错误）、11 检查更新失败（所有来源都连不上）。
 （--launch=<版本> 这种写法也认。）
 
 也可以给快捷方式加这个参数（双击即进游戏）。那种情况没有控制台可写，所以出
@@ -485,6 +496,51 @@ the "ENGLISH" line further down.
 
 导出是只读的：不碰你当前的存档，也不改任何设置 —— 会写存档目录的是「恢复
 备份」，不是它。
+
+
+【在控制台里导入 / 删除 / 恢复】
+
+· 导入一个本地 jar（就是界面里「管理版本 → 导入」）
+
+      "Mindustry启动器.exe" --import "D:\\下载\\Mindustry-146.jar" --as 146
+
+  --as 必须写：版本号会变成清单文件名和列表里那一行，不会从文件名猜。
+  想换类型加 --type（默认 Mindustry，另一个常见的是 MindustryX）。
+  同名版本已存在时**拒绝覆盖**（退出码 8），要换就先 --delete-version。
+
+· 删掉一个版本 / 一份备份（不可逆）
+
+      "Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+      "Mindustry启动器.exe" --delete-backup 默认 --yes
+      "Mindustry启动器.exe" --delete-backup 默认 2026-09-20_16-35-32 --yes
+
+  两个都**必须带 --yes**：少了它退出码 2，一个字节都不动。删除只去掉清单
+  这条引用，数据文件没人用了才会被回收 —— 不会碰你的存档。
+
+· 恢复一份备份（会覆盖当前存档）
+
+      "Mindustry启动器.exe" --restore-backup 默认 --yes
+      "Mindustry启动器.exe" --restore-backup 默认 2026-09-20_16-35-32 --yes
+
+  这是唯一会覆盖当前存档的命令，所以同样**必须带 --yes**。它和界面走同一条
+  路：恢复前先把当前存档打成 rollback_*.zip（快照建不成功就中止，一个文件
+  都不删），清空旧内容走回收站，中途失败会回滚；恢复完还会回读文件数，
+  少了就按失败处理（退出码 9），不会报假成功。
+  省略时间戳 = 该分类最新那个。
+
+· 上面这三类（删版本 / 删备份 / 恢复）一次只做一件：同时给两个以上会按
+  参数写坏处理（退出码 2），什么都不做 —— 只做第一个等于悄悄丢掉另一半。
+
+· 查有没有新版本（只查不下载）
+
+      "Mindustry启动器.exe" --check-updates
+
+  退出码 10 = 查到新版本（不是错误，脚本靠它决定要不要提醒），
+  11 = 一个来源都查不通（断网 / 被限流）。这两个必须分开读，
+  否则断网时脚本会以为「已是最新」。要下载就开界面点「检查更新」。
+
+导入 / 删除 / 恢复 / 改设置这几类，在启动器正开着时都会被拒绝（退出码 6）：
+那个实例内存里还留着旧列表，撞上去轻则白做、重则互相覆盖。
 
 
 【在控制台里改设置】
@@ -716,6 +772,13 @@ MAIN FEATURES
   --export-backup packs a save backup into a zip; --list-backups shows what
   backups you have.
 
+- Import / delete / restore from the command line
+  --import adds a local jar to the version library, --delete-version /
+  --delete-backup remove a version or one backup, and --restore-backup puts a
+  backup back into the save folder (see the section below). The last three
+  change data and require --yes; --check-updates only asks whether a newer
+  version exists and downloads nothing.
+
 - The launcher updates itself
   When a new version is out it downloads quietly in the background and swaps
   itself in the next time you close it -- no manual download and extraction.
@@ -748,9 +811,11 @@ gotchas are all in there. Neither creates a window -- they don't even load the
 UI module.
 
 One thing at a time, in this order: --help -> --list -> --list-backups ->
---get -> --set -> --export -> --export-backup -> --launch (read-only ones come
-first; exporting comes before launching because it changes no state, while
-launching holds the save folder).
+--check-updates -> --get -> --set -> --export -> --export-backup -> --import ->
+--restore-backup -> --delete-version / --delete-backup -> --launch (read-only
+ones come first, the online one after the local ones; exporting comes before
+launching because it changes no state, while launching holds the save folder;
+writing in ranks before destroying).
 
 Progress and results are written to the console you typed the command in: which
 version is starting, that it came up (with the time it took), that the game
@@ -776,7 +841,10 @@ Exit codes are meaningful, so scripts can branch on them: 0 success (quitting
 the game after playing counts as success), 1 the launcher crashed, 2 bad command
 line, 3 no such version or backup, 4 the version was found but would not start,
 5 export failed (while packing the jar / zip), 6 changing the config failed
-(launcher running / not writable).
+(launcher running / not writable), 7 deleting failed, 8 importing failed (jar
+unreadable / same name already exists), 9 restoring failed, 10 the update check
+found a newer version (not an error), 11 the update check failed (no source
+reachable).
 (--launch=<name> works too.)
 
 A shortcut can carry the argument as well (double-click and play). There is no
@@ -822,6 +890,59 @@ the cost of a few extra seconds; java -jar and the game are unaffected.
 
 Exporting is read-only: it never touches your current saves or your settings --
 writing to the save folder is what "restore backup" does, not this.
+
+
+IMPORTING / DELETING / RESTORING FROM THE CONSOLE
+
+- Import a local jar (the GUI's "管理版本 -> 导入")
+
+      "Mindustry启动器.exe" --import "D:\\Downloads\\Mindustry-146.jar" --as 146
+
+  --as is mandatory: the version name becomes the manifest filename and the row
+  in the list, and it is never guessed from the file name. --type changes the
+  type (Mindustry by default; MindustryX is the other common one). An existing
+  version of the same name is never overwritten (exit code 8) -- delete it with
+  --delete-version first if that is what you want.
+
+- Delete a version / one backup (cannot be undone)
+
+      "Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+      "Mindustry启动器.exe" --delete-backup 默认 --yes
+      "Mindustry启动器.exe" --delete-backup 默认 2026-09-20_16-35-32 --yes
+
+  Both require --yes: without it you get exit code 2 and not a single byte is
+  touched. Deleting only drops the manifest reference; data files are reclaimed
+  once nothing else uses them -- your saves are not touched.
+
+- Restore one backup (overwrites the current save)
+
+      "Mindustry启动器.exe" --restore-backup 默认 --yes
+      "Mindustry启动器.exe" --restore-backup 默认 2026-09-20_16-35-32 --yes
+
+  This is the one command that overwrites your current save, so --yes is
+  required here too. It goes through the same code as the GUI: the current save
+  is packed into rollback_*.zip first (if that snapshot cannot be made, nothing
+  is deleted), the old contents go to the Recycle Bin, a failure halfway rolls
+  back, and afterwards the file count is read back -- fewer files means exit
+  code 9 instead of a fake success. Leaving out the timestamp means the newest
+  backup of that profile.
+
+- Only one of those three (delete version / delete backup / restore) per run:
+  giving two or more is bad usage (exit code 2) and nothing runs at all -- doing
+  only the first would silently drop the other half.
+
+- Check for new game versions (check only, no download)
+
+      "Mindustry启动器.exe" --check-updates
+
+  Exit code 10 = an update was found (not an error; scripts use it to decide
+  whether to notify), 11 = no source could be reached (offline / rate limited).
+  Those two must be read apart, or an offline machine looks "up to date". To
+  download, use the window and click "检查更新".
+
+Import / delete / restore / --set are all refused while the launcher is running
+(exit code 6): that instance still holds the old lists in memory, and running
+into it ranges from wasted work to overwriting each other.
 
 
 CHANGING SETTINGS FROM THE CONSOLE

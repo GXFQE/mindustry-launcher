@@ -46,7 +46,12 @@ launcher/               全部源码
     selfupdate.py       ★ 启动器自身更新（查新版 → 下精简包 → 退出时换文件）
     gamecmd.py          启动参数解析 + 命令行拼装
     cli.py              启动器自己的命令行参数（--launch：直接启动指定版本）
-    cli_info.py         --list / --help：纯输出，在 import tkinter 之前分派（不建窗口）
+    cli_info.py         --list / --list-backups / --check-updates / --help：纯输出，在 import tkinter 之前分派（不建窗口）
+    cli_export.py       --export / --export-backup（拼 jar / zip，绝不碰存档目录）
+    cli_cfg.py          --get / --set（只写 config.json；启动器开着时拒绝）
+    cli_import.py       --import（把一个 jar 收进版本库，--as 必须给）
+    cli_restore.py      --restore-backup（把备份写回存档目录，必须 --yes）
+    cli_delete.py       --delete-version / --delete-backup（只删清单，必须 --yes）
     console.py          把话说给「敲命令的那个控制台」（附父进程控制台 + 按代码页编码）
     gamelog.py          游戏输出捕获（落盘 + 内存缓冲 + 管道编码兜底）
     gui_core.py         界面内核：线程队列、状态栏、窗口骨架
@@ -64,9 +69,9 @@ LICENSE                 GNU GPL-3.0 全文
 ## 开发流程
 
 ```bash
-python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（656 项）
+python _tools/verify/code_regression.py          # 1. 改完代码先跑回归（684 项）
 python _tools/verify/i18n_check.py               # 1b. 改了文案/加功能：语言包与「文案不许写死」门禁（35 项）
-python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（164 项，不起游戏）
+python _tools/verify/gui_smoke.py                # 2. 改了界面：真建窗口点一遍（166 项，不起游戏）
 python _tools/verify/i18n_switch_smoke.py        # 2b. 改了文案/语言：真建窗口切一次语言（29 项）
 python _tools/verify/selfupdate_check.py         # 3. 改了自更新：离线跑一遍检查/换文件/回滚（92 项）
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ 打包前先清产物

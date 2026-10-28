@@ -8,8 +8,8 @@ For people who already have it running and want the details. **What it is and ho
 ## Command line
 
 Most of what the GUI does has a console counterpart — handy in scripts and shortcuts, or when you would
-rather not open a window at all. (Restoring a backup and renaming a version are GUI-only; deleting a
-save profile is deliberately GUI-only, because it takes three confirmations.)
+rather not open a window at all. (Renaming a version and adding a note to a backup are GUI-only;
+deleting a save profile is deliberately GUI-only, because it takes three confirmations.)
 
 | Switch | What it does |
 |---|---|
@@ -17,14 +17,16 @@ save profile is deliberately GUI-only, because it takes three confirmations.)
 | `--launch <version>` | Launch that version with **no launcher window at all**; the launcher exits by itself when the game does |
 | `--list` | List the versions on this machine (starts nothing, does not even load the UI modules) |
 | `--list-backups` | List save backups per profile (timestamp + note) |
+| `--check-updates` | Check for new game versions (check only, no download; exit code `10` when there is one) |
 | `--get [key]` | Show settings; without a key, list them all (one per line: `key = value # description`, defaults marked) |
 | `--set key=value …` | Change settings (writes `config.json` only, effective on the next start; several at once) |
 | `--export <version>` | Pack a version into a jar you can run with `java -jar`; accepts `--out` |
 | `--export-backup <profile> [timestamp]` | Pack one backup into a zip (omitting the timestamp means the newest); accepts `--out` |
 | `--import <jar> --as <version>` | Add a jar to the version library (`--type` changes the type; `Mindustry` by default). `--as` is required |
+| `--restore-backup <profile> [timestamp]` | Restore one backup into the save folder (omitting the timestamp means the newest). **Needs `--yes`** |
 | `--delete-version <version>` | Delete a version (manifest plus unreferenced objects). **Needs `--yes`** |
 | `--delete-backup <profile> [timestamp]` | Delete one backup (omitting the timestamp means the newest). **Needs `--yes`** |
-| `--yes` | Confirm a delete. Without it a delete does nothing at all |
+| `--yes` | Confirm a data-changing action (delete / restore). Without it nothing at all happens |
 | `--help` | Usage, exit codes and a few caveats |
 
 ```bat
@@ -40,11 +42,15 @@ save profile is deliberately GUI-only, because it takes three confirmations.)
 
 ### Must-knows
 
-- **One task per run**, priority: `--help` → `--list` → `--list-backups` → `--get` → `--set` →
-  `--export` → `--export-backup` → `--import` → `--delete-version` / `--delete-backup` →
-  `--launch` (read-only first; export before launch — export changes no state, while a launch holds
-  the save directory; import before delete — adding is milder than destroying; delete after export,
-  so `--export-backup X --delete-backup X` copies before it removes).
+- **One task per run**, priority: `--help` → `--list` → `--list-backups` → `--check-updates` →
+  `--get` → `--set` → `--export` → `--export-backup` → `--import` → `--restore-backup` →
+  `--delete-version` / `--delete-backup` → `--launch` (read-only first, the online one after the
+  local ones; export before launch — export changes no state, while a launch holds the save
+  directory; writing in before destroying; delete after export, so `--export-backup X --delete-backup X`
+  copies before it removes).
+- **Data-changing targets are mutually exclusive**: giving two of `--restore-backup` /
+  `--delete-version` / `--delete-backup` is bad usage (exit code `2`) and nothing runs at all — doing
+  only the first would silently drop the other half.
 - **A version name** is the row shown in the version list (`Mindustry v146`, `BE v146`); the bare
   number (`v146`) works too as long as only one type has it — an ambiguous name tells you to write it
   out. A mistyped name, or `--launch` with nothing after it, **starts nothing** and lists what is
@@ -78,6 +84,9 @@ save profile is deliberately GUI-only, because it takes three confirmations.)
 | `6` | Could not write the config (launcher running / disk refused / read-back mismatch) |
 | `7` | Delete failed (manifest locked or still there after read-back; the launcher was running) |
 | `8` | Import failed (jar unreadable / same name already exists / manifest not written) |
+| `9` | Restore failed (backup not writable / fewer files after read-back; the launcher was running) |
+| `10` | Update check found a newer version (not an error — "something to say") |
+| `11` | Update check failed (no source could be reached) |
 
 ### Importing a jar
 
@@ -129,6 +138,48 @@ launcher must be closed.
   on a typical install), so a delete takes noticeably longer than a listing.
 - A backup is addressed by a **profile and timestamp that exist on disk**: the profile name is looked
   up in what was just scanned, never joined into a path, so `..` cannot escape the backup directory.
+
+### Restoring a backup
+
+**Manage backups → Restore backup** in the GUI is `--restore-backup` on the console. It takes the same
+arguments as `--delete-backup` (profile plus an optional timestamp; omitting it means the newest).
+
+```bat
+:: Put the newest backup of the profile 默认 back
+"Mindustry启动器.exe" --restore-backup 默认 --yes
+
+:: Restore one specific backup (timestamps come from --list-backups)
+"Mindustry启动器.exe" --restore-backup 默认 2026-09-20_16-35-32 --yes
+```
+
+- **`--yes` is required**: this is the one command that **overwrites your current save**. Without it
+  you get exit code `2` and not a single file is touched.
+- It goes through the same code as the GUI, so both safety nets are intact: the current save is packed
+  into `rollback_*.zip` first (if that snapshot cannot be made, nothing is deleted), the old contents
+  go to the Recycle Bin (unless `permanent_delete` is on), and a failure halfway rolls back.
+- **It reads back afterwards**: as many files as the manifest lists have to be in the save folder.
+  Fewer means exit code `9` instead of a fake success — do not start the game then; check the folder
+  first, what is missing may still be in the Recycle Bin.
+- **Only that one profile's save folder is touched** — not the version library, not other profiles. It
+  is refused while the launcher is running (exit code `6`). The profile name is looked up in the scan
+  results, never joined into a path.
+
+### Checking for updates (check only, no download)
+
+`--check-updates` is the **Check for updates** button without the download: pulling a 100+ MB package
+from a console with no progress bar leaves you reading logs when it goes wrong. To download, use the
+window, or let the launcher check on startup (it downloads by itself when it finds one).
+
+```bat
+"Mindustry启动器.exe" --check-updates
+if errorlevel 10 echo An update is available
+```
+
+- Exit code `10` means **an update was found** — not an error; scripts use it to decide whether to
+  notify. Exit code `11` means **no source could be reached** (offline / rate limited). That is not
+  the same as "already up to date", and must not be read as such, or an offline machine would silently
+  skip updates.
+- It only covers game versions, not the launcher's own update (that is a separate mechanism).
 
 ### Changing settings with `--set`
 

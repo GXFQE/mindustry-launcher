@@ -12,19 +12,23 @@
   也没必要加载 Tk 那一堆 DLL（省点开销，也少一类出错可能）。
 
 启动器自己的其它命令行参数（``--launch <版本>`` / ``--list`` / ``--list-backups``
-/ ``--help`` / ``--get [<键>]`` / ``--set <键>=<值>`` / ``--export <版本>`` /
-``--export-backup <分类> [<时间戳>]`` / ``--out <路径>`` /
+/ ``--check-updates`` / ``--help`` / ``--get [<键>]`` / ``--set <键>=<值>`` /
+``--export <版本>`` / ``--export-backup <分类> [<时间戳>]`` / ``--out <路径>`` /
+``--import <jar> --as <版本号>`` / ``--restore-backup <分类> [<时间戳>]`` /
 ``--delete-version <版本>`` / ``--delete-backup <分类> [<时间戳>]`` /
 ``--yes``，见 ``launcher/cli.py``）
 在这里解析成 ``CliRequest`` 再分派 —— 解析规则和「版本名怎么匹配」都在那边，
 本文件不掺和。
 
-★ 六类用法，轻重不同：
+★ 七类用法，轻重不同：
 
-  * ``--list`` / ``--list-backups`` / ``--help`` / ``--get`` —— **只输出信息**。
-    它们在 ``import tkinter`` **之前**就交给 ``launcher/cli_info.py``（``--get``
-    在 ``cli_cfg.py``）处理掉：这条路上一个 Tk 对象都不会建（连模块都不 import）。
-    读版本列表走 ``storage.open_version_manager``，和界面同一个打开方式。
+  * ``--list`` / ``--list-backups`` / ``--check-updates`` / ``--help`` /
+    ``--get`` —— **只输出信息**。它们在 ``import tkinter`` **之前**就交给
+    ``launcher/cli_info.py``（``--get`` 在 ``cli_cfg.py``）处理掉：这条路上
+    一个 Tk 对象都不会建（连模块都不 import）。读版本列表走
+    ``storage.open_version_manager``，和界面同一个打开方式。
+    ★ ``--check-updates`` 是这里面唯一联网的（只查不下载），一样不写任何
+      东西、不需要进程锁。
   * ``--set <键>=<值>`` —— **只改配置**。同样在 import tkinter 之前，但它会先
     拿一把「配置锁」（``applock.py``）：启动器开着时拿不到就拒绝改，因为那个
     实例退出时会用内存里的旧配置整个写回，改动会被静默吃掉。
@@ -35,6 +39,10 @@
     ``import tkinter`` 之前交给 ``launcher/cli_import.py``：写几千个 CAS 对象
     不需要界面，只是慢。也拿同一把进程锁（启动器开着时它的后台回收会把这批
     还没被清单引用上的对象当孤儿）。
+  * ``--restore-backup <分类> [<时间戳>]`` —— **只把一个备份写回存档目录**。
+    同样在 ``import tkinter`` 之前交给 ``launcher/cli_restore.py``。它比导入更
+    该拿锁：启动器的自动备份线程正在读同一个存档目录。**必须带 ``--yes``**，
+    因为这会清空并覆盖当前存档（底层有回滚快照 + 回收站两道退路）。
   * ``--delete-version`` / ``--delete-backup`` —— **只删东西**。同样在
     ``import tkinter`` 之前交给 ``launcher/cli_delete.py``，也拿同一把进程锁
     （启动器开着时它内存里的列表还指着要删的记录）。**必须带 ``--yes``**，
@@ -110,9 +118,11 @@ def main() -> int:
 
         code = cli_info.report_bad_usage(cli_request, has_console)
     elif cli_request.info_only:
-        # ★ --list / --list-backups / --help：纯输出，**在 import tkinter 之前**
-        #   处理掉 —— 这条路上一个 Tk 对象都不会建（cli_info 里连 tkinter 都是
-        #   延迟 import 的，只在「没控制台、只能弹框」那条退化路上才用）。
+        # ★ --list / --list-backups / --check-updates / --help：纯输出，**在
+        #   import tkinter 之前**处理掉 —— 这条路上一个 Tk 对象都不会建
+        #   （cli_info 里连 tkinter 都是延迟 import 的，只在「没控制台、只能
+        #   弹框」那条退化路上才用）。--check-updates 是这里面唯一联网的，
+        #   但它一样只读、不写任何东西，也不需要进程锁。
         # ★ 这里**不能直接 return**：下面的收尾标记是命令行用法的最后一行，
         #   四条路（帮助 / 列版本 / 启动成功 / 启动失败）都得走到它 ——
         #   真机实测抓到的：提前 return 会让 `--list` 输出完就没了下文，
@@ -139,6 +149,13 @@ def main() -> int:
         from launcher import cli_import
 
         code = cli_import.run(cli_request, has_console)
+    elif cli_request.restore_only:
+        # ★ --restore-backup：同样不需要界面。这条路会**清空并重写**存档目录，
+        #   所以必须带 --yes（缺了在 parse_cli 里已成 bad_usage，走上面那条
+        #   分支），而且和 --set / --delete* 抢同一把锁。
+        from launcher import cli_restore
+
+        code = cli_restore.run(cli_request, has_console)
     elif cli_request.delete_only:
         # ★ --delete-version / --delete-backup：同样不需要界面。这条路会**删**
         #   磁盘上的记录，所以必须带 --yes（缺了在 parse_cli 里已成 bad_usage，

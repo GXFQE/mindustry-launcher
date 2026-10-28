@@ -270,6 +270,9 @@ REQUIRED = {
         # 2026-10-11：断点文件用确定性路径（download_tmp_path）；换源/重试
         # 从已下部分接着下，而不是从零开始
         "download_tmp_path", "download_file",
+        # 2026-10-28：`--check-updates` 靠它把「所有来源都失败」和「没有新
+        # 版本」分开（默认那条路把异常吞成 []，断网会被读成「已是最新」）
+        "UpdateCheckError", "get_available_updates",
     ],
     # 2026-09-22 新增的三个模块（面向发布的可扩展性接口）。跟 09-18 那两个
     # 一样：不在包里 = exe 还是旧逻辑（来源写死、没有迁移链、没有扩展点），
@@ -395,6 +398,14 @@ REQUIRED = {
         "export_only", "EXIT_EXPORT_FAILED",
         # 2026-10-17 傍晚：--get / --set（看和改设置，同样在 import tkinter 之前）
         "GET_FLAG", "SET_FLAG", "cfg_only", "EXIT_CONFIG_FAILED",
+        # 2026-10-28：--import / --restore-backup / --delete-* / --check-updates
+        # ★ 少一个常量的症状同上：那个开关变成「不认识的参数」→ 反手打开界面，
+        #   而它本该连 Tk 都不建（`--restore-backup` 还会把存档目录留在游戏手里）。
+        "IMPORT_FLAG", "AS_FLAG", "TYPE_FLAG", "import_only",
+        "RESTORE_BACKUP_FLAG", "restore_only", "EXIT_RESTORE_FAILED",
+        "DELETE_VERSION_FLAG", "DELETE_BACKUP_FLAG", "EXIT_DELETE_FAILED",
+        "CHECK_UPDATES_FLAG", "EXIT_UPDATE_AVAILABLE", "EXIT_UPDATE_FAILED",
+        "YES_FLAG", "EXIT_IMPORT_FAILED",
         # 「可用版本」列出来时的上限（弹窗不把整个版本列表糊上去）
         "AVAILABLE_LIMIT",
         # 解析：认 `--launch X` 与 `--launch=X`，不认识的参数一律忽略
@@ -465,6 +476,16 @@ REQUIRED = {
         "run",
         "_import_version",
         "EXIT_IMPORT_FAILED", "EXIT_BAD_USAGE",
+    ],
+    # 2026-10-28 新增：`--restore-backup` 的全部实现。
+    # ★ 和 cli_delete 同一条路（零界面、同一把进程锁），但方向相反：它**写**
+    #   存档目录。漏掉它的症状是「恢复命令没反应，反而弹出启动器界面」。
+    "launcher.cli_restore": [
+        "run",
+        "_restore_backup",
+        # 恢复后回读：清单里几个文件，目录里就该有几个
+        "_expected_files", "_count_files",
+        "EXIT_RESTORE_FAILED", "EXIT_NO_VERSION",
     ],
     # 2026-10-17 新增：配置写盘的进程间锁。★ 少了它，`--set` 会在启动器
     # 开着时照改，然后被对方退出时那次 save() 静默覆盖 —— 不报错、不留痕。

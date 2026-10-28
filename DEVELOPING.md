@@ -48,7 +48,12 @@ launcher/               All source code
     selfupdate.py       ★ Launcher self-update (check → download slim package → swap files on exit)
     gamecmd.py          Launch-argument parsing + command-line assembly
     cli.py              The launcher's own command-line arguments (--launch: start a version directly)
-    cli_info.py         --list / --help: pure output, dispatched before importing tkinter (no window)
+    cli_info.py         --list / --list-backups / --check-updates / --help: pure output, dispatched before importing tkinter (no window)
+    cli_export.py       --export / --export-backup (pack a jar / zip; never touches the save folder)
+    cli_cfg.py          --get / --set (writes config.json only; refuses while the launcher is running)
+    cli_import.py       --import (adds a jar to the version library; --as is mandatory)
+    cli_restore.py      --restore-backup (writes a backup back into the save folder; needs --yes)
+    cli_delete.py       --delete-version / --delete-backup (manifest only; needs --yes)
     console.py          Talking to "the console you typed the command in" (attach to the parent console + encode per code page)
     gamelog.py          Game output capture (to disk + in-memory buffer + pipe-encoding fallback)
     gui_core.py         GUI core: thread queue, status bar, window skeleton
@@ -66,9 +71,9 @@ LICENSE                 Full GNU GPL-3.0 text
 ## Development workflow
 
 ```bash
-python _tools/verify/code_regression.py          # 1. Run after any code change (656 checks)
+python _tools/verify/code_regression.py          # 1. Run after any code change (684 checks)
 python _tools/verify/i18n_check.py               # 1b. After touching strings/features: language-pack and "no hardcoded strings" gate (35 checks)
-python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (164 checks, no game launched)
+python _tools/verify/gui_smoke.py                # 2. After touching the GUI: really build windows and click through (166 checks, no game launched)
 python _tools/verify/i18n_switch_smoke.py        # 2b. After touching strings/languages: really build windows and switch language (29 checks)
 python _tools/verify/selfupdate_check.py         # 3. After touching self-update: offline check/swap/rollback run (92 checks)
 python _tools/recycle.py dist/Mindustry启动器     # 4. ★ Clear build output before packaging

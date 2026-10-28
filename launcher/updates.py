@@ -31,6 +31,17 @@ logger = logging.getLogger(__name__)
 StatusCallback = Callable[..., None]
 
 
+class UpdateCheckError(RuntimeError):
+    """检查更新**根本没查成**：所有来源都失败了（断网 / 限流 / 返回格式不对）。
+
+    ★ 和「所有版本都已是最新」是两回事 —— 混在一起，调用方就会把断网读成
+      「不用更新」。
+    ★ 界面那条路**不用**它：检查更新失败只在状态栏留一句，不该弹框打断；
+      只有命令行（``cli_info`` 的 ``--check-updates``）靠它给非 0 退出码。
+      （``get_available_updates(strict=True)`` 才会抛。）
+    """
+
+
 class UpdateManager:
     def __init__(
         self,
@@ -47,17 +58,36 @@ class UpdateManager:
         # 来判断，结果游戏运行时点「检查更新」会弹「下载正在进行」。
         self.downloading = threading.Event()
 
-    def get_available_updates(self) -> list[dict[str, Any]]:
+    def get_available_updates(
+        self, strict: bool = False
+    ) -> list[dict[str, Any]]:
+        """查有哪些新版本（已经在本地的不算）。
+
+        ``strict=True`` 时，**所有来源都失败**会抛 ``UpdateCheckError`` ——
+        命令行靠它区分「真的没有更新」和「根本查不通」。界面不用（见
+        ``UpdateCheckError`` 的说明）。
+        """
+        errors: list[str] = []
         try:
             infos: list[dict] = []
+            sources = self.version_manager.sources.all()
             # 多个来源要依次请求，网络不通时每个都要等满一个超时。
             # 中途被叫停（用户关窗口）就别再把后面的也等完了。
-            for source in self.version_manager.sources.all():
+            for source in sources:
                 if self.stop_event.is_set():
                     return []
-                info = self._fetch_release(source)
+                try:
+                    info = self._fetch_release(source, strict=strict)
+                except Exception as e:                          # noqa: BLE001
+                    # 单个来源失败不算整体失败：另一个源可能有结果。
+                    errors.append(f"{getattr(source, 'type', '?')}: {e}")
+                    continue
                 if info is not None:
                     infos.append(info)
+            # ★ 一个都没查成才算「查不了」。部分失败仍然有结果可用，这时候
+            #   报错等于把另一半的成功也一起扔掉。
+            if strict and sources and len(errors) == len(sources):
+                raise UpdateCheckError("；".join(errors))
             existing = {
                 (v["type"], v["raw_version"])
                 for v in self.version_manager.get_versions()
@@ -69,8 +99,12 @@ class UpdateManager:
             ]
             logger.debug(f"发现 {len(available)} 个可用更新")
             return available
+        except UpdateCheckError:
+            raise
         except Exception as e:
             logger.error(f"检查更新失败: {e}")
+            if strict:
+                raise UpdateCheckError(str(e)) from e
             return []
 
     def start_download_updates(
@@ -117,15 +151,26 @@ class UpdateManager:
             status(t("updater.found_auto"))
             self.start_download_updates(updates, status_cb)
 
-    def _fetch_release(self, source) -> dict | None:
-        """按来源定义拉一次 release 信息（见 sources.VersionSource）。
+    def _fetch_release(self, source, strict: bool = False) -> dict | None:
+        """按来源定义拉一次 release 信息（见 ``sources.VersionSource``）。
 
         ``source`` 是 ``VersionSource``：取哪个接口、认哪个资产、要不要
         预发布版，全在那张表里 —— 加来源不用改这个方法。
+
+        ``strict=True`` 时，「查不了」一律抛 ``UpdateCheckError``（没有
+        api_url / 断网 / 超时 / 返回的不是数组）；「查到了但没有匹配的资产」
+        仍然返回 ``None`` —— 那是一次**成功**的查询，只是这个源没有新版本。
         """
         url = getattr(source, "api_url", "") or ""
         if not url:
             logger.warning(f"来源 {getattr(source, 'type', '?')} 没有 api_url，跳过")
+            if strict:
+                # ★ 异常正文只放**技术细节**（来源类型），中文那半句在
+                #   cli_info 的 t("cli.check_updates_failed") 里 —— 这里再写
+                #   一句中文就成了「翻译不了的界面文案」，i18n 门禁也会拦。
+                raise UpdateCheckError(
+                    f"source {getattr(source, 'type', '?')}: no api_url"
+                )
             return None
         try:
             req = urllib.request.Request(
@@ -147,6 +192,11 @@ class UpdateManager:
                     f"{url} 返回的不是 release 数组（可能是 API 限流）: "
                     f"{str(data)[:120]}"
                 )
+                if strict:
+                    # 同上：中文只进日志，异常正文留给 cli_info 包一层翻译。
+                    raise UpdateCheckError(
+                        f"{url}: not a release array (API rate limit?)"
+                    )
                 return None
             want_prerelease = getattr(source, "prerelease", None)
             for release in data:
@@ -186,8 +236,16 @@ class UpdateManager:
                         continue
                     logger.debug(f"获取到发布信息: {info}")
                     return info
-        except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
+        except (
+            urllib.error.URLError,
+            OSError,            # 超时是 OSError/SocketTimeout，不是 URLError
+            json.JSONDecodeError,
+            ValueError,
+            KeyError,
+        ) as e:
             logger.error(f"获取 {url} 发布信息失败: {e}")
+            if strict:
+                raise UpdateCheckError(f"{url}：{e}") from e
         return None
 
     def _download_sequence(

@@ -613,6 +613,7 @@ def main():
     test_salvage_game_log()
     test_cli_launch_args()
     test_backup_delete_guard()
+    test_update_check_strict()
     test_game_work_dir()
     test_packed_required_table()
     print("\n" + "=" * 60)
@@ -3825,6 +3826,11 @@ def test_cli_launch_args():
           r.delete_profile == "默认"
           and r.delete_stamp == "2026-09-20_16-35-32"
           and r.delete_only and r.confirmed, str(r))
+    r = req(["--delete-backup=默认", "2026-09-20_16-35-32", "--yes"])
+    check("★ 等号写法也收下第二个位置参数（三个备份开关共用一套解析）",
+          r.delete_profile == "默认"
+          and r.delete_stamp == "2026-09-20_16-35-32"
+          and r.delete_only, str(r))
     r = req(["--delete-backup", "默认", "--yes"])
     check("★ --delete-backup 后面跟 --yes 时**不许**把它当成时间戳吞掉",
           r.delete_profile == "默认" and r.delete_stamp == ""
@@ -3841,17 +3847,75 @@ def test_cli_launch_args():
     r = req(["--delete-version", "v146", "--delete-backup", "默认", "--yes"])
     check("★★ 两个删除目标同时给 ⇒ 报错、什么都不删"
           "（只做一个等于悄悄丢掉一半）",
-          r.bad_usage and r.bad_note == "cli.delete_two_targets"
+          r.bad_usage and r.bad_note == "cli.too_many_targets"
           and not r.delete_only, str(r))
     r = req(["--yes"])
-    check("--yes 单独给 ⇒ 什么也不做（它只是删除的修饰词）",
-          not r.used and not r.delete_only, str(r))
+    check("--yes 单独给 ⇒ 什么也不做（它只是改数据那几类的修饰词）",
+          not r.used and not r.delete_only and not r.restore_only, str(r))
     r = req(["--delete-version", "v146", "--yes", "--launch", "v146"])
     check("★ 删除压过 --launch（要删就别顺手把游戏拉起来）",
           r.delete_only and r.launch == "", str(r))
     r = req(["--delete-version", "v146", "--yes", "--export", "v146"])
     check("★ 导出压过删除（--export X --delete-version X ⇒ 先留副本，顺序天然安全）",
           r.export == "v146" and not r.delete_only, str(r))
+
+    # ---- --restore-backup：把备份写回存档目录（同样必须 --yes） ----
+    r = req(["--export-backup=默认", "2026-09-20_16-35-32", "--out", r"D:\x"])
+    check("★ --export-backup=<分类> + 时间戳 + --out：三样各就各位"
+          "（时间戳不许被当成多余参数丢掉）",
+          r.export_profile == "默认"
+          and r.export_backup == "2026-09-20_16-35-32"
+          and r.out == r"D:\x", str(r))
+    r = req(["--restore-backup", "默认", "--yes"])
+    check("--restore-backup + --yes ⇒ 只恢复（不启动、不建窗口）",
+          r.restore_profile == "默认" and r.restore_stamp == ""
+          and r.restore_only and r.confirmed and r.used, str(r))
+    r = req(["--restore-backup=默认", "2026-09-20_16-35-32", "--yes"])
+    check("--restore-backup=<分类> 等号写法 + 第二个位置参数＝时间戳",
+          r.restore_profile == "默认"
+          and r.restore_stamp == "2026-09-20_16-35-32"
+          and r.restore_only, str(r))
+    r = req(["--restore-backup", "默认", "--yes"])
+    check("★ --restore-backup 后面跟 --yes 时**不许**把它当成时间戳吞掉",
+          r.restore_stamp == "" and r.confirmed, str(r))
+    r = req(["--restore-backup", "默认"])
+    check("★★ --restore-backup 不带 --yes ⇒ 算参数写坏（一个文件都不许动）："
+          "恢复会覆盖当前存档，和删除同一道闸",
+          r.bad_usage and r.bad_flag == CLI.YES_FLAG
+          and r.bad_note == "cli.bad_usage_confirm"
+          and r.restore_profile == "默认" and not r.restore_only, str(r))
+    r = req(["--restore-backup"])
+    check("--restore-backup 缺值 ⇒ 写坏，bad_flag 指的是它（不是 --yes）",
+          r.bad_usage and r.bad_flag == CLI.RESTORE_BACKUP_FLAG, str(r))
+    r = req(["--restore-backup", "--yes"])
+    check("★ --restore-backup 后面直接跟 --yes ⇒ 仍算缺值（不把开关当分类名）",
+          r.bad_usage and r.bad_flag == CLI.RESTORE_BACKUP_FLAG, str(r))
+    r = req(["--restore-backup", "默认", "--delete-backup", "默认", "--yes"])
+    check("★★ 恢复和删除同时给 ⇒ 报错、什么都不做"
+          "（会改数据的目标不许给两个，见 cli.too_many_targets）",
+          r.bad_usage and r.bad_note == "cli.too_many_targets"
+          and not r.restore_only and not r.delete_only, str(r))
+    r = req(["--restore-backup", "默认", "--yes", "--launch", "x"])
+    check("★ 恢复压过 --launch（要恢复就别顺手把游戏拉起来）",
+          r.restore_only and r.launch == "", str(r))
+    r = req(["--export-backup", "默认", "--restore-backup", "默认", "--yes"])
+    check("★ 导出备份压过恢复（--export-backup X --restore-backup X ⇒ 先留副本）",
+          r.export_profile == "默认" and not r.restore_only, str(r))
+
+    # ---- --check-updates：只读、联网、退出码有含义 ----
+    r = req(["--check-updates"])
+    check("--check-updates ⇒ 归到「只输出信息」（不建窗口、不拿锁）",
+          r.check_updates and r.info_only and r.used
+          and not r.export_only and not r.delete_only, str(r))
+    r = req(["--check-updates", "--launch", "v146"])
+    check("★ 检查更新压过 --launch（只读优先；别为了查一下就把游戏拉起来）",
+          r.check_updates and r.launch == "", str(r))
+    r = req(["--list", "--check-updates"])
+    check("★ --list 压过 --check-updates（本地即时先答，联网那条排后面）",
+          r.list_versions and not r.check_updates, str(r))
+    r = req(["--check-updates", "--delete-version", "v146", "--yes"])
+    check("★ 检查更新压过删除（只读优先于写）",
+          r.check_updates and not r.delete_only, str(r))
 
     # ---- --get / --set：看和改设置（同样不建窗口） ----
     r = req(["--get"])
@@ -4101,12 +4165,18 @@ def test_cli_launch_args():
         n for n in ast.walk(main_def)
         if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.delete_only"
     ]
-    # 导入那条路（--import）：同样不需要界面。它排在导出之后、删除之前 ——
-    # 一是它要往版本库写几千个对象，不能先建窗口；二是它非破坏性，该比删除
-    # 更早拿到机会。
+    # 导入那条路（--import）：同样不需要界面。它排在导出之后、恢复之前 ——
+    # 一是它要往版本库写几千个对象，不能先建窗口；二是它非破坏性，该比恢复 /
+    # 删除更早拿到机会。
     import_if = [
         n for n in ast.walk(main_def)
         if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.import_only"
+    ]
+    # 恢复那条路（--restore-backup）：同样不需要界面。它要**清空并重写**存档
+    # 目录，所以排在导入之后、删除之前（往里写 → 改存档 → 毁东西）。
+    restore_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.restore_only"
     ]
     gui_import = [
         n for n in ast.walk(main_def)
@@ -4133,22 +4203,28 @@ def test_cli_launch_args():
           len(import_if) == 1
           and bool(_calls_named(import_if[0], "cli_import.run")),
           f"{len(import_if)} 条")
+    check("入口有一条 cli_request.restore_only 分支，且真的调了 cli_restore.run",
+          len(restore_if) == 1
+          and bool(_calls_named(restore_if[0], "cli_restore.run")),
+          f"{len(restore_if)} 条")
     check("★ 入口**先拦参数写坏**（--export 缺值时不许掉进界面分支去闪一下窗口）",
           len(bad_if) == 1
           and bool(_calls_named(bad_if[0], "cli_info.report_bad_usage")),
           f"{len(bad_if)} 条")
-    check("……六条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出 → 导入 → 删除",
+    check("……七条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出 → 导入 → "
+          "恢复 → 删除",
           len(bad_if) == 1 and len(info_if) == 1 and len(cfg_if) == 1
           and len(export_if) == 1 and len(import_if) == 1
-          and len(delete_if) == 1
+          and len(restore_if) == 1 and len(delete_if) == 1
           and bad_if[0].lineno < info_if[0].lineno
           < cfg_if[0].lineno < export_if[0].lineno
-          < import_if[0].lineno < delete_if[0].lineno,
+          < import_if[0].lineno < restore_if[0].lineno < delete_if[0].lineno,
           f"{bad_if[0].lineno if bad_if else '?'} / "
           f"{info_if[0].lineno if info_if else '?'} / "
           f"{cfg_if[0].lineno if cfg_if else '?'} / "
           f"{export_if[0].lineno if export_if else '?'} / "
           f"{import_if[0].lineno if import_if else '?'} / "
+          f"{restore_if[0].lineno if restore_if else '?'} / "
           f"{delete_if[0].lineno if delete_if else '?'}")
     # ★ 真机实测抓到的：这一分支原来是 `return cli_info.run(...)`，于是
     #   `--list` / `--help` 输出完就没了下文 —— 跳过下面那行「启动器已退出
@@ -4158,7 +4234,7 @@ def test_cli_launch_args():
     branches = [
         b for b in (
             bad_if[:1] + info_if[:1] + cfg_if[:1] + export_if[:1]
-            + import_if[:1] + delete_if[:1]
+            + import_if[:1] + restore_if[:1] + delete_if[:1]
         )
     ]
     branch_returns = [
@@ -4221,11 +4297,44 @@ def test_cli_launch_args():
           bool(_calls_named(_func_def(export_mod, "_export_backup"),
                             "manager.export_backup"))
           and not _calls_named(export_mod, "restore_backup"))
-    check("cli_info 提供 render_backups / report_bad_usage",
+
+    # ---- cli_restore：把备份写回存档目录（同样不需要界面） ----
+    restore_mod = ast.parse(
+        (ROOT / "launcher" / "cli_restore.py").read_text(encoding="utf-8"))
+    check("cli_restore 提供 run / _restore_backup",
+          all(_func_def(restore_mod, n) is not None
+              for n in ("run", "_restore_backup")))
+    check("cli_restore 顶层**没有** import tkinter（恢复一条路一个 Tk 都不建）",
+          not _imports_tk(restore_mod))
+    check("★ --restore-backup 复用 BackupManager.restore_backup"
+          "（回滚快照 / 回收站那两道退路不许另写一份）",
+          bool(_calls_named(_func_def(restore_mod, "_restore_backup"),
+                            "manager.restore_backup")))
+    check("★ --restore-backup 拿的是那把「会改数据」的进程锁"
+          "（启动器开着时它的自动备份正在读同一个目录）",
+          bool(_calls_named(_func_def(restore_mod, "run"),
+                            "acquire_data_lock")))
+    check("★ --restore-backup 走**查表**（list_all_backups），"
+          "绝不拿分类名去拼路径",
+          bool(_calls_named(_func_def(restore_mod, "_restore_backup"),
+                            "list_all_backups")))
+    check("★ --restore-backup 恢复后回读文件数（restore_backup 只保证不抛异常）",
+          bool(_calls_named(_func_def(restore_mod, "_restore_backup"),
+                            "_count_files"))
+          and bool(_calls_named(_func_def(restore_mod, "_restore_backup"),
+                                "_expected_files")))
+
+    check("cli_info 提供 render_backups / report_bad_usage / check_updates",
           all(_func_def(info_mod, n) is not None
-              for n in ("render_backups", "report_bad_usage")))
+              for n in ("render_backups", "report_bad_usage", "check_updates")))
     check("cli_info.run 里分派了 --list-backups",
           _refers(_func_def(info_mod, "run"), "list_backups"))
+    check("cli_info.run 里分派了 --check-updates",
+          _refers(_func_def(info_mod, "run"), "check_updates"))
+    check("★ --check-updates 用的是 strict 模式"
+          "（否则断网会被读成「已是最新」，静默跳过更新）",
+          _kw_arg_is(_func_def(info_mod, "check_updates"),
+                     "strict", "True"))
     check("cli_cfg.run 里分派了 --set（只读优先：先看 get）",
           _refers(_func_def(cfg_mod, "run"), "set_pairs")
           and _refers(_func_def(cfg_mod, "run"), "get_key"))
@@ -4249,15 +4358,21 @@ def test_cli_launch_args():
                      "compression", "zipfile.ZIP_DEFLATED"))
 
     help_text = CLI_INFO.render_help()
-    check("--help 渲染得出来：九个开关都写进去了",
+    check("--help 渲染得出来：十七个开关都写进去了",
           all(f in help_text for f in (
               CLI.LAUNCH_FLAG, CLI.LIST_FLAG, CLI.HELP_FLAG,
               CLI.EXPORT_FLAG, CLI.EXPORT_BACKUP_FLAG,
               CLI.LIST_BACKUPS_FLAG, CLI.OUT_FLAG,
-              CLI.GET_FLAG, CLI.SET_FLAG)))
+              CLI.GET_FLAG, CLI.SET_FLAG, CLI.IMPORT_FLAG,
+              CLI.AS_FLAG, CLI.TYPE_FLAG, CLI.RESTORE_BACKUP_FLAG,
+              CLI.DELETE_VERSION_FLAG, CLI.DELETE_BACKUP_FLAG,
+              CLI.CHECK_UPDATES_FLAG, CLI.YES_FLAG)))
     check("--help 里写了退出码 5（导出失败）与 6（改配置失败）",
           "5" in help_text and "6" in help_text
           and "导出" in help_text and "配置" in help_text)
+    check("--help 里写了退出码 7~11（删除 / 导入 / 恢复 / 检查更新）",
+          all(code in help_text for code in ("7", "8", "9", "10", "11"))
+          and "恢复" in help_text and "检查更新" in help_text)
     check("★ --help 渲染后没有残留占位符（少传参数会原样显示 {cmd} 这种怪东西）",
           "{" not in help_text and "}" not in help_text, repr(help_text[:40]))
     check("--list 空列表时说人话（不是空白）",
@@ -4455,7 +4570,9 @@ def test_cli_launch_args():
     # ---------------------------------------------- 退出码（脚本里要用）
     codes = {name: getattr(CLI, name) for name in (
         "EXIT_OK", "EXIT_CRASH", "EXIT_BAD_USAGE", "EXIT_NO_VERSION",
-        "EXIT_LAUNCH_FAILED",
+        "EXIT_LAUNCH_FAILED", "EXIT_EXPORT_FAILED", "EXIT_CONFIG_FAILED",
+        "EXIT_DELETE_FAILED", "EXIT_IMPORT_FAILED", "EXIT_RESTORE_FAILED",
+        "EXIT_UPDATE_AVAILABLE", "EXIT_UPDATE_FAILED",
     )}
     check("退出码常量齐了、互不相同、0 只留给「正常」",
           codes["EXIT_OK"] == 0 and len(set(codes.values())) == len(codes),
@@ -4712,6 +4829,58 @@ def test_packed_required_table():
     names = names_of(compile(p.read_text(encoding="utf-8"), str(p), "exec"))
     check("反向对照：喂一个不存在的符号会被报出来（否则第 ③ 条等于没查）",
           [s for s in fake["launcher.cli"] if s not in names] == ["这个符号不可能存在"])
+
+
+# ------------- 26. 检查更新：「查不通」不许读成「没有新版本」 -------------
+def test_update_check_strict():
+    """★ 「查不通」必须和「没有新版本」分开。
+
+    ``get_available_updates(strict=False)``（界面那条路）把网络异常吞成空
+    列表，这是**故意**的：检查失败只该在状态栏留一句，不该弹框打断。
+
+    但命令行跟着用就出事：脚本里 ``--check-updates`` 拿到空列表，会读成
+    「已是最新」，静默跳过该下载的更新。所以 ``strict=True`` 要求**所有
+    来源都失败**时抛 ``UpdateCheckError``；部分来源失败仍然返回结果（报错
+    等于把另一半的成功也扔掉）。
+
+    用 ``127.0.0.1:1`` 制造「连接被拒绝」：立即失败，不占回归时间。
+    """
+    print("\n[26] 检查更新：断网 != 已是最新")
+    from types import SimpleNamespace
+
+    from launcher.updates import UpdateCheckError, UpdateManager
+
+    class _VM:
+        def __init__(self, sources):
+            self.sources = SimpleNamespace(all=lambda: sources)
+
+        def get_versions(self):
+            return []
+
+    dead = SimpleNamespace(
+        type="Dead",
+        api_url="http://127.0.0.1:1/",
+        use_mirror=False,
+        prerelease=None,
+        matches_asset=lambda name: True,
+    )
+
+    um = UpdateManager(_VM([dead]), None, None, threading.Event())
+    raised = False
+    try:
+        um.get_available_updates(strict=True)
+    except UpdateCheckError:
+        raised = True
+    check("★★ 所有来源都失败 + strict ⇒ 抛 UpdateCheckError（不是返回空列表）",
+          raised)
+
+    um2 = UpdateManager(_VM([dead]), None, None, threading.Event())
+    check("……同一份数据、非 strict ⇒ 仍然安静地返回空列表（界面那条路不变）",
+          um2.get_available_updates() == [])
+
+    um3 = UpdateManager(_VM([]), None, None, threading.Event())
+    check("★ 一个来源都没配 ⇒ 不算「查不通」（空列表本身就是答案）",
+          um3.get_available_updates(strict=True) == [])
 
 
 # ------------- 25. 删除备份的安全边界（路径校验 + 只删清单） -------------

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from pathlib import Path
 
 from . import applock, console
@@ -33,9 +34,12 @@ from .cli import (
     EXIT_CONFIG_FAILED,
     EXIT_CRASH,
     EXIT_OK,
+    EXIT_UPDATE_AVAILABLE,
+    EXIT_UPDATE_FAILED,
     EXPORT_BACKUP_FLAG,
     IMPORT_FLAG,
     LAUNCH_FLAG,
+    RESTORE_BACKUP_FLAG,
     SET_FLAG,
     YES_FLAG,
     CliRequest,
@@ -149,6 +153,63 @@ def render_backups() -> str:
     return "\n".join(lines)
 
 
+def check_updates(
+    config: ConfigManager | None, has_console: bool
+) -> tuple[int, str]:
+    """``--check-updates``：查有没有新的游戏版本（**只查不下载**）。
+
+    返回 ``(退出码, 说给用户的话)``，三种结果分得很开：
+
+    * ``EXIT_OK`` —— 查通了，没有新版本；
+    * ``EXIT_UPDATE_AVAILABLE`` —— 查通了，有（**不是错误**，是「有话要说」）；
+    * ``EXIT_UPDATE_FAILED`` —— 一个来源都查不通（断网 / 限流 / 配置坏了）。
+
+    ★ 全靠 ``get_available_updates(strict=True)``：默认那条路把异常吞成
+      空列表，命令行跟着用就会把断网读成「已是最新」，静默跳过该下载的更新。
+    """
+    if config is None:
+        # 配置读不出来 = 不知道有哪些来源，这一步不做（不是「已是最新」）。
+        return EXIT_UPDATE_FAILED, t("cli.check_updates_no_config")
+    if has_console:
+        # 联网最坏要等「来源数 × 5 秒」。先说一句，否则看着像卡住了
+        #（同 cli_import 的进度行：只说给控制台，没有控制台时说了也没人看）。
+        console.say(t("cli.check_updates_start"))
+
+    # 延迟 import：--help / --list 那条路上不必把 urllib / 更新逻辑拖进来。
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .updates import UpdateCheckError, UpdateManager
+
+    # UpdateManager 要一个线程池，但这条路**只查不下载**，它自始至终闲着；
+    # 建一个最小的只为满足构造签名，收尾关掉让进程能干净退出。
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        manager = UpdateManager(
+            open_version_manager(BASE_DIR, config),
+            config,
+            executor,
+            threading.Event(),
+        )
+        updates = manager.get_available_updates(strict=True)
+    except UpdateCheckError as e:
+        logger.error(f"命令行检查更新失败：{e}")
+        return EXIT_UPDATE_FAILED, t("cli.check_updates_failed", err=e)
+    finally:
+        executor.shutdown(wait=False)
+
+    if not updates:
+        logger.info("命令行 --check-updates：没有新版本")
+        return EXIT_OK, t("cli.check_updates_none")
+
+    # 名字和 --list 里那一行一致（``类型 版本号``），用户可以直接抄去
+    # --launch / --delete-version。
+    listing = "\n".join(f"  {u['type']} {u['version']}" for u in updates)
+    logger.info(f"命令行 --check-updates：发现 {len(updates)} 个新版本")
+    return EXIT_UPDATE_AVAILABLE, t(
+        "cli.check_updates_found", count=len(updates), list=listing
+    )
+
+
 def report_bad_usage(request: CliRequest, has_console: bool) -> int:
     """参数写了一半（``--launch`` / ``--export`` / ``--set`` 缺值）：说清楚 + 退出码 2。
 
@@ -158,22 +219,25 @@ def report_bad_usage(request: CliRequest, has_console: bool) -> int:
     ★ ``--export-backup`` 缺的是**分类名**不是版本名，话术不一样（见那个分支）；
       ``--set`` 缺的是「键=值」，而且「哪一项不是 键=值」和「一项都没给」
       也要分开说（``bad_token``）—— 前者多半是带空格的参数忘了加引号。
-    ★ ``bad_flag == --yes`` 是另一回事：删除**写全了**，只是没确认。这条不许
-      说成「参数写坏了」了事，要明确告诉用户「什么都没删，加 --yes 才动」。
-    ★ 两个删除目标同时给时 ``bad_note`` 直接指定文案（那条规则没有对应的
-      开关名可说，硬套任何一条现成话术都会说错）。
+    ★ ``bad_flag == --yes`` 是另一回事：删除 / 恢复**写全了**，只是没确认。
+      这条不许说成「参数写坏了」了事，要明确告诉用户「什么都没动，加 --yes
+      才执行」。
+    ★ 会改数据的目标同时给了多个时，``bad_note`` 直接指定文案（那条规则没有
+      对应的开关名可说，硬套任何一条现成话术都会说错）。
     """
     flag = request.bad_flag or LAUNCH_FLAG
     if request.bad_note:
         key = request.bad_note
     elif flag == YES_FLAG:
-        key = "cli.bad_usage_delete"
+        key = "cli.bad_usage_confirm"
     elif flag == AS_FLAG:
         # ★ 和 --yes 同一类：jar 给了、命令本身写全了，只差版本号。
         #   不能说成「参数写坏了」了事，要让用户知道**什么都没导入**。
         key = "cli.bad_usage_as"
     elif flag == IMPORT_FLAG:
         key = "cli.bad_usage_import"
+    elif flag == RESTORE_BACKUP_FLAG:
+        key = "cli.bad_usage_restore_backup"
     elif flag == DELETE_VERSION_FLAG:
         key = "cli.bad_usage_delete_version"
     elif flag == DELETE_BACKUP_FLAG:
@@ -225,15 +289,22 @@ def run(request: CliRequest, has_console: bool) -> int:
         logger.warning(f"配置读不出来，按系统语言输出：{e}")
 
     try:
-        if request.show_help:
+        if request.check_updates:
+            # ★ 它是这里面唯一会联网的，而且退出码有含义（10 = 有更新），
+            #   不能混进「算出一个 text 就完事」那条路。
+            code, text = check_updates(config, has_console)
+        elif request.show_help:
             text = render_help()
+            code = EXIT_OK
             logger.info("命令行 --help：打印用法说明")
         elif request.list_backups:
             text = render_backups()
+            code = EXIT_OK
             logger.info("命令行 --list-backups：列出存档备份")
         else:
             versions = collect_versions(config)
             text = render_list(versions)
+            code = EXIT_OK
             logger.info(f"命令行 --list：列出 {len(versions)} 个版本")
     except Exception as e:                                      # noqa: BLE001
         # 读配置 / 读清单各自都有兜底，这里是最后一道。命令行不该带着异常栈
@@ -243,7 +314,7 @@ def run(request: CliRequest, has_console: bool) -> int:
         return EXIT_CRASH
 
     say(text, has_console)
-    return EXIT_OK
+    return code
 
 
 def say(text: str, has_console: bool) -> None:

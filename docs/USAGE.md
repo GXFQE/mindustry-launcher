@@ -77,7 +77,7 @@ deleting a save profile is deliberately GUI-only, because it takes three confirm
 |---|---|
 | `0` | Finished normally (a finished game counts) |
 | `1` | The launcher itself failed |
-| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete without `--yes`, `--import` without `--as`) |
+| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete or restore without `--yes`, `--import` without `--as`) |
 | `3` | No such version / no such backup |
 | `4` | Version found, but the game did not start |
 | `5` | Export failed (while packing the jar / zip) |

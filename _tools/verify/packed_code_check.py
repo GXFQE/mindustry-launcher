@@ -458,6 +458,14 @@ REQUIRED = {
         "_not_found_text",
         "EXIT_DELETE_FAILED", "EXIT_NO_VERSION",
     ],
+    # 2026-10-28 新增：`--import` 的全部实现。
+    # ★ 和 cli_delete 同一条路：一个 Tk 对象都不建。漏掉它的症状是「导入命令
+    #   没反应，反而弹出启动器界面」，用户以为程序没听懂。
+    "launcher.cli_import": [
+        "run",
+        "_import_version",
+        "EXIT_IMPORT_FAILED", "EXIT_BAD_USAGE",
+    ],
     # 2026-10-17 新增：配置写盘的进程间锁。★ 少了它，`--set` 会在启动器
     # 开着时照改，然后被对方退出时那次 save() 静默覆盖 —— 不报错、不留痕。
     "launcher.applock": [

@@ -8,8 +8,8 @@ For people who already have it running and want the details. **What it is and ho
 ## Command line
 
 Most of what the GUI does has a console counterpart — handy in scripts and shortcuts, or when you would
-rather not open a window at all. (Importing a jar, restoring a backup and renaming a version are
-GUI-only; deleting a save profile is deliberately GUI-only, because it takes three confirmations.)
+rather not open a window at all. (Restoring a backup and renaming a version are GUI-only; deleting a
+save profile is deliberately GUI-only, because it takes three confirmations.)
 
 | Switch | What it does |
 |---|---|
@@ -21,6 +21,7 @@ GUI-only; deleting a save profile is deliberately GUI-only, because it takes thr
 | `--set key=value …` | Change settings (writes `config.json` only, effective on the next start; several at once) |
 | `--export <version>` | Pack a version into a jar you can run with `java -jar`; accepts `--out` |
 | `--export-backup <profile> [timestamp]` | Pack one backup into a zip (omitting the timestamp means the newest); accepts `--out` |
+| `--import <jar> --as <version>` | Add a jar to the version library (`--type` changes the type; `Mindustry` by default). `--as` is required |
 | `--delete-version <version>` | Delete a version (manifest plus unreferenced objects). **Needs `--yes`** |
 | `--delete-backup <profile> [timestamp]` | Delete one backup (omitting the timestamp means the newest). **Needs `--yes`** |
 | `--yes` | Confirm a delete. Without it a delete does nothing at all |
@@ -40,9 +41,10 @@ GUI-only; deleting a save profile is deliberately GUI-only, because it takes thr
 ### Must-knows
 
 - **One task per run**, priority: `--help` → `--list` → `--list-backups` → `--get` → `--set` →
-  `--export` → `--export-backup` → `--delete-version` / `--delete-backup` → `--launch` (read-only
-  first; export before launch — export changes no state, while a launch holds the save directory;
-  delete after export, so `--export-backup X --delete-backup X` copies before it removes).
+  `--export` → `--export-backup` → `--import` → `--delete-version` / `--delete-backup` →
+  `--launch` (read-only first; export before launch — export changes no state, while a launch holds
+  the save directory; import before delete — adding is milder than destroying; delete after export,
+  so `--export-backup X --delete-backup X` copies before it removes).
 - **A version name** is the row shown in the version list (`Mindustry v146`, `BE v146`); the bare
   number (`v146`) works too as long as only one type has it — an ambiguous name tells you to write it
   out. A mistyped name, or `--launch` with nothing after it, **starts nothing** and lists what is
@@ -69,12 +71,37 @@ GUI-only; deleting a save profile is deliberately GUI-only, because it takes thr
 |---|---|
 | `0` | Finished normally (a finished game counts) |
 | `1` | The launcher itself failed |
-| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete without `--yes`) |
+| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete without `--yes`, `--import` without `--as`) |
 | `3` | No such version / no such backup |
 | `4` | Version found, but the game did not start |
 | `5` | Export failed (while packing the jar / zip) |
 | `6` | Could not write the config (launcher running / disk refused / read-back mismatch) |
 | `7` | Delete failed (manifest locked or still there after read-back; the launcher was running) |
+| `8` | Import failed (jar unreadable / same name already exists / manifest not written) |
+
+### Importing a jar
+
+Got a `desktop.jar` (the one from an official release, one a friend sent, or one you packed yourself)
+and want it in the version list? Use `--import`. It is the same path as **Version manager → Import**
+in the GUI.
+
+```bat
+:: Import as Mindustry 146
+"Mindustry启动器.exe" --import "D:\Downloads\Mindustry-146.jar" --as 146
+
+:: Import as MindustryX 160 (--type switches the type)
+"Mindustry启动器.exe" --import "D:\Downloads\Desktop.jar" --as 160 --type MindustryX
+```
+
+- **`--as` is required** and never guessed from the file name — the version name becomes the manifest
+  filename and the row in the list, and a wrong one has to be deleted first. Without it you get exit
+  code `2` and not a single object is written.
+- **The same name is never overwritten**: importing 146 again while `Mindustry 146` exists is refused
+  (exit code `8`). Delete it first (`--delete-version "Mindustry 146" --yes`) or pick another name.
+- **Refused while the launcher is running** (exit code `6`): its background GC would treat the freshly
+  written objects (manifest not on disk yet) as unreferenced orphans.
+- Importing only reads that jar and **never touches your saves**; afterwards it reclaims unreferenced
+  objects once, same as the GUI does.
 
 ### Deleting a version or a backup
 

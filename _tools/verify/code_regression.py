@@ -3766,6 +3766,43 @@ def test_cli_launch_args():
     check("--out 单独给 ⇒ 什么也不做（它只是别的开关的修饰词）",
           not r.used, str(r))
 
+    # ---- --import / --as / --type：把一个 jar 收进版本库 ----
+    r = req(["--import", r"D:\下载\Mindustry.jar", "--as", "146"])
+    check("--import + --as ⇒ 只导入（不启动、不建窗口），类型默认 Mindustry",
+          r.import_jar == r"D:\下载\Mindustry.jar"
+          and r.import_name == "146" and r.import_type == "Mindustry"
+          and r.import_only and r.used, str(r))
+    r = req(["--import=a.jar", "--as=146", "--type", "MindustryX"])
+    check("--import / --as / --type 的等号写法同样认",
+          r.import_jar == "a.jar" and r.import_name == "146"
+          and r.import_type == "MindustryX" and r.import_only, str(r))
+    r = req(["--import", "a.jar"])
+    check("★★ --import 不带 --as ⇒ 算参数写坏（一个对象都不许写），"
+          "bad_flag 点名是 --as —— 和 --yes 同一类：命令写全了，只差一句确认",
+          r.bad_usage and r.bad_flag == CLI.AS_FLAG
+          and r.import_jar == "a.jar" and not r.import_only, str(r))
+    r = req(["--import"])
+    check("--import 缺值 ⇒ 写坏，bad_flag 指出是它（不是 --as）",
+          r.bad_usage and r.bad_flag == CLI.IMPORT_FLAG, str(r))
+    r = req(["--as", "146"])
+    check("--as 单独给 ⇒ 什么也不做（它只是 --import 的修饰词）",
+          not r.used and not r.import_only, str(r))
+    r = req(["--type", "MindustryX"])
+    check("--type 单独给 ⇒ 什么也不做（同上）", not r.used, str(r))
+    r = req(["--import", "a.jar", "--as", "146", "--out", r"D:\x"])
+    check("--import 混进 --out ⇒ 正常导入（--out 是别的开关的修饰词，忽略即可）",
+          r.import_only and r.import_name == "146", str(r))
+    r = req(["--import", "a.jar", "--as", "146", "--launch", "v146"])
+    check("★ 导入压过 --launch（要导就别顺手把游戏拉起来）",
+          r.import_only and r.launch == "", str(r))
+    r = req(["--import", "a.jar", "--as", "146",
+             "--delete-version", "v146", "--yes"])
+    check("★ 导入压过删除（往里加排在往外毁前面；要删请单开一条命令）",
+          r.import_only and not r.delete_only, str(r))
+    r = req(["--export", "v146", "--import", "a.jar", "--as", "146"])
+    check("★ 导出压过导入（先留副本再动版本库）",
+          r.export == "v146" and not r.import_only, str(r))
+
     # ---- --delete-version / --delete-backup：删除（不可逆，必须 --yes） ----
     r = req(["--delete-version", "Mindustry v146"])
     check("★★ --delete-version 不带 --yes ⇒ 算参数写坏（一个字节都不许动），"
@@ -4064,6 +4101,13 @@ def test_cli_launch_args():
         n for n in ast.walk(main_def)
         if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.delete_only"
     ]
+    # 导入那条路（--import）：同样不需要界面。它排在导出之后、删除之前 ——
+    # 一是它要往版本库写几千个对象，不能先建窗口；二是它非破坏性，该比删除
+    # 更早拿到机会。
+    import_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.import_only"
+    ]
     gui_import = [
         n for n in ast.walk(main_def)
         if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("gui")
@@ -4085,19 +4129,26 @@ def test_cli_launch_args():
           len(delete_if) == 1
           and bool(_calls_named(delete_if[0], "cli_delete.run")),
           f"{len(delete_if)} 条")
+    check("入口有一条 cli_request.import_only 分支，且真的调了 cli_import.run",
+          len(import_if) == 1
+          and bool(_calls_named(import_if[0], "cli_import.run")),
+          f"{len(import_if)} 条")
     check("★ 入口**先拦参数写坏**（--export 缺值时不许掉进界面分支去闪一下窗口）",
           len(bad_if) == 1
           and bool(_calls_named(bad_if[0], "cli_info.report_bad_usage")),
           f"{len(bad_if)} 条")
-    check("……五条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出 → 删除",
+    check("……六条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出 → 导入 → 删除",
           len(bad_if) == 1 and len(info_if) == 1 and len(cfg_if) == 1
-          and len(export_if) == 1 and len(delete_if) == 1
+          and len(export_if) == 1 and len(import_if) == 1
+          and len(delete_if) == 1
           and bad_if[0].lineno < info_if[0].lineno
-          < cfg_if[0].lineno < export_if[0].lineno < delete_if[0].lineno,
+          < cfg_if[0].lineno < export_if[0].lineno
+          < import_if[0].lineno < delete_if[0].lineno,
           f"{bad_if[0].lineno if bad_if else '?'} / "
           f"{info_if[0].lineno if info_if else '?'} / "
           f"{cfg_if[0].lineno if cfg_if else '?'} / "
           f"{export_if[0].lineno if export_if else '?'} / "
+          f"{import_if[0].lineno if import_if else '?'} / "
           f"{delete_if[0].lineno if delete_if else '?'}")
     # ★ 真机实测抓到的：这一分支原来是 `return cli_info.run(...)`，于是
     #   `--list` / `--help` 输出完就没了下文 —— 跳过下面那行「启动器已退出
@@ -4107,7 +4158,7 @@ def test_cli_launch_args():
     branches = [
         b for b in (
             bad_if[:1] + info_if[:1] + cfg_if[:1] + export_if[:1]
-            + delete_if[:1]
+            + import_if[:1] + delete_if[:1]
         )
     ]
     branch_returns = [

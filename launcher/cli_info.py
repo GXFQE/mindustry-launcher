@@ -24,14 +24,17 @@ import logging
 import sys
 from pathlib import Path
 
-from . import console
+from . import applock, console
 from .cli import (
+    AS_FLAG,
     DELETE_BACKUP_FLAG,
     DELETE_VERSION_FLAG,
     EXIT_BAD_USAGE,
+    EXIT_CONFIG_FAILED,
     EXIT_CRASH,
     EXIT_OK,
     EXPORT_BACKUP_FLAG,
+    IMPORT_FLAG,
     LAUNCH_FLAG,
     SET_FLAG,
     YES_FLAG,
@@ -58,6 +61,29 @@ def load_config() -> ConfigManager:
     一处，两边各写一遍迟早走岔。
     """
     return ConfigManager(BASE_DIR / "config.json")
+
+
+def acquire_data_lock() -> tuple[applock.AppLock, int, str]:
+    """拿「会改数据」的进程锁（``--set`` / ``--import`` / ``--delete*`` 共用）。
+
+    返回 ``(锁, 退出码, 说给用户的话)``：退出码是 ``EXIT_OK`` 表示拿到了，
+    调用方尽管动手、完事记得 ``锁.release()``；否则调用方把这句原样说出去、
+    按这个码退出，**什么都不做**。
+
+    ★ 为什么这三类命令共用一把锁：怕的是同一件事 —— 启动器开着时，它内存里
+      的 config、版本列表、备份列表都是旧的，而且它还有自己的后台回收线程。
+      冲突的根源是**同一个进程**，那锁就该是同一把（``applock`` 按数据根命名）。
+    ★ 两种拿不到要分开说：``busy`` = 先关掉启动器；别的 = 临时目录写不了。
+      处理办法完全不同，说错了用户只会白折腾。
+    """
+    lock = applock.acquire(BASE_DIR)
+    if lock.held:
+        return lock, EXIT_OK, ""
+    if lock.reason == "busy":
+        return lock, EXIT_CONFIG_FAILED, t("cli.write_locked", path=lock.path)
+    return lock, EXIT_CONFIG_FAILED, t(
+        "cli.write_lock_unavailable", path=lock.path, err=lock.reason
+    )
 
 
 def command_name() -> str:
@@ -142,6 +168,12 @@ def report_bad_usage(request: CliRequest, has_console: bool) -> int:
         key = request.bad_note
     elif flag == YES_FLAG:
         key = "cli.bad_usage_delete"
+    elif flag == AS_FLAG:
+        # ★ 和 --yes 同一类：jar 给了、命令本身写全了，只差版本号。
+        #   不能说成「参数写坏了」了事，要让用户知道**什么都没导入**。
+        key = "cli.bad_usage_as"
+    elif flag == IMPORT_FLAG:
+        key = "cli.bad_usage_import"
     elif flag == DELETE_VERSION_FLAG:
         key = "cli.bad_usage_delete_version"
     elif flag == DELETE_BACKUP_FLAG:
@@ -154,13 +186,14 @@ def report_bad_usage(request: CliRequest, has_console: bool) -> int:
         key = "cli.bad_usage_backup"
     else:
         key = "cli.bad_usage"
-    # 几段文案的占位符不同（cmd / flag / token），多传的会被 format 忽略
+    # 几段文案的占位符不同（cmd / flag / token / jar），多传的会被 format 忽略
     say(
         t(
             key,
             flag=flag,
             cmd=command_name(),
             token=request.bad_token,
+            jar=request.import_jar,
         ),
         has_console,
     )

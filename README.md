@@ -79,9 +79,9 @@ The interface **follows your system language** (Chinese / English); settings can
 
 ### Command line
 
-- Eleven switches: launch, list versions, list backups, read / write settings, export a jar, export a
-  backup zip, delete a version or a backup — no window, real exit codes, friendly to scripts and
-  shortcuts. Deleting always requires `--yes` and a closed launcher
+- Twelve switches: launch, list versions, list backups, read / write settings, export a jar, export a
+  backup zip, import a jar, delete a version or a backup — no window, real exit codes, friendly to
+  scripts and shortcuts. Deleting always requires `--yes` and a closed launcher
 - Full switch table, exit codes and the limits of `--set`: see **[detailed usage](docs/USAGE.md#command-line)**
 
 ### Logs

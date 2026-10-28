@@ -29,9 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from . import applock
 from .cli import (
-    EXIT_CONFIG_FAILED,
     EXIT_DELETE_FAILED,
     EXIT_NO_VERSION,
     EXIT_OK,
@@ -39,7 +37,7 @@ from .cli import (
     available_names,
     match_version,
 )
-from .cli_info import load_config, say
+from .cli_info import acquire_data_lock, load_config, say
 from .config import ConfigManager
 from .i18n import apply_setting, t
 from .storage import (
@@ -175,36 +173,26 @@ def run(request: CliRequest, has_console: bool) -> int:
     except Exception as e:                                      # noqa: BLE001
         logger.warning(f"配置读不出来，按系统语言输出：{e}")
 
-    lock = applock.acquire(BASE_DIR)
+    lock, code, text = acquire_data_lock()
+    if code != EXIT_OK:
+        # 启动器开着（或者锁文件不可用）—— 两个字的结论一样：什么都没删。
+        say(text, has_console)
+        return code
     try:
-        if not lock.held:
-            # ★ 两条失败路径都要落到最后的 say：命令行**每一条**出口都得说句话，
-            #   否则用户看到的就是「敲完什么都没有」。
-            code = EXIT_CONFIG_FAILED
-            if lock.reason == "busy":
-                # 有启动器开着：它内存里的版本列表/备份列表还指着要删的东西
-                text = t("cli.delete_locked", path=lock.path)
-            else:
-                text = t(
-                    "cli.delete_lock_unavailable",
-                    path=lock.path,
-                    err=lock.reason,
+        try:
+            if request.delete_version:
+                code, text = _delete_version(
+                    config, request.delete_version
                 )
-        else:
-            try:
-                if request.delete_version:
-                    code, text = _delete_version(
-                        config, request.delete_version
-                    )
-                else:
-                    code, text = _delete_backup(
-                        config, request.delete_profile, request.delete_stamp
-                    )
-            except Exception as e:                              # noqa: BLE001
-                # 兜底：命令行不该带着异常栈退出（用户看不懂），说一句人话、
-                # 细节留在日志里就够了。
-                logger.error(f"命令行删除失败：{e}", exc_info=True)
-                code, text = EXIT_DELETE_FAILED, t("cli.delete_failed", err=e)
+            else:
+                code, text = _delete_backup(
+                    config, request.delete_profile, request.delete_stamp
+                )
+        except Exception as e:                                  # noqa: BLE001
+            # 兜底：命令行不该带着异常栈退出（用户看不懂），说一句人话、
+            # 细节留在日志里就够了。
+            logger.error(f"命令行删除失败：{e}", exc_info=True)
+            code, text = EXIT_DELETE_FAILED, t("cli.delete_failed", err=e)
     finally:
         lock.release()
 

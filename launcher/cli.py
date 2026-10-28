@@ -9,10 +9,10 @@
 不 import 包内模块），``_tools/verify/code_regression.py`` 直接喂列表进去
 断言，不用建窗口、不用真实数据。
 
-目前有十二个开关（其中 ``--out`` / ``--yes`` 是修饰词）：
+目前有十五个开关（其中 ``--out`` / ``--yes`` / ``--as`` / ``--type`` 是修饰词）：
 ``--launch`` / ``--list`` / ``--help`` / ``--export`` / ``--export-backup`` /
-``--list-backups`` / ``--out`` / ``--get`` / ``--set`` / ``--delete-version`` /
-``--delete-backup`` / ``--yes``
+``--list-backups`` / ``--out`` / ``--get`` / ``--set`` / ``--import`` /
+``--as`` / ``--type`` / ``--delete-version`` / ``--delete-backup`` / ``--yes``
 ---------------------------------------------------------------------
 ``--launch <版本>``
     让启动器**直接**启动指定版本，省掉「选中 → 点启动 → 点确认」。
@@ -47,6 +47,19 @@
 ``--out <路径>``
     ``--export`` / ``--export-backup`` 的输出位置（文件或已存在的目录）。
     省略 = 写到当前目录、用默认文件名。
+
+``--import <jar>``
+    把一个 jar 收进版本库（就是界面「版本管理 → 导入」那条路），收完就能
+    直接 ``--launch``。**只读那个 jar、不碰存档**。
+    ★ 必须同时给 ``--as``：版本号会变成清单文件名和界面里那一行，不能靠
+      文件名猜（``Mindustry.jar`` 这种名字里根本没有版本号）。
+
+``--as <版本号>``
+    ``--import`` 导入成什么版本号（如 ``146`` / ``BE v7``）。修饰词。
+
+``--type <类型>``
+    ``--import`` 导入成什么版本类型，默认 ``Mindustry``（另一个常见的是
+    ``MindustryX``）。修饰词；只在导入时用得上。
 
 ``--delete-version <版本>``
     删掉一个游戏版本（只删清单；没人引用的对象随后回收）。不可逆。
@@ -93,6 +106,14 @@ OUT_FLAG = "--out"
 GET_FLAG = "--get"
 # 改设置（一个或多个 键=值；只写 config.json，下次启动生效）。
 SET_FLAG = "--set"
+# 把一个 jar 收进版本库（就是界面「版本管理 → 导入」那条路）。
+IMPORT_FLAG = "--import"
+# 导入的版本号（修饰词，跟着 --import 用）。★ 必须给，不许从文件名猜。
+AS_FLAG = "--as"
+# 导入的版本类型（修饰词）。省略 = Mindustry。
+TYPE_FLAG = "--type"
+# 导入时没写 --type 用的类型（和界面导入对话框的默认值一致）。
+DEFAULT_VERSION_TYPE = "Mindustry"
 # 删掉一个游戏版本（清单 + 随后回收没人引用的对象）。不可逆。
 DELETE_VERSION_FLAG = "--delete-version"
 # 删掉一个存档备份（清单 + 随后回收没人引用的对象）。不可逆。
@@ -126,6 +147,9 @@ EXIT_CONFIG_FAILED = 6
 #: 删除失败：清单删不掉（占用 / 没权限）、或者删完回读发现它还在。
 #: ★ 和「没找到目标」（3）分开：一个是「没有这个东西」，一个是「删不动」。
 EXIT_DELETE_FAILED = 7
+#: 导入失败：jar 打不开 / 不是 zip、同名版本已存在（不覆盖）、
+#: 写进去了但回读发现清单没出来。
+EXIT_IMPORT_FAILED = 8
 
 
 @dataclass(frozen=True)
@@ -156,6 +180,12 @@ class CliRequest:
     get_key: str = ""
     #: ``--set`` 的 ``键=值``（原样保留，解析与校验在 ``cli_cfg`` 里）
     set_pairs: tuple[str, ...] = ()
+    #: 要导入的 jar（``--import``）；空串 = 不导入
+    import_jar: str = ""
+    #: 导入成什么版本号（``--as``）；空 = 没给（见 ``import_only``）
+    import_name: str = ""
+    #: 导入成什么类型（``--type``）；空 = 用 ``DEFAULT_VERSION_TYPE``
+    import_type: str = ""
     #: 要删除的版本名（``--delete-version``）；空串 = 不删版本
     delete_version: str = ""
     #: 要删除的备份所属分类（``--delete-backup``）；空串 = 不删备份
@@ -190,6 +220,7 @@ class CliRequest:
             or self.export_profile
             or self.get_config
             or self.set_pairs
+            or self.import_jar
             or self.delete_version
             or self.delete_profile
         )
@@ -221,6 +252,20 @@ class CliRequest:
         ``--set`` 要动 config.json，**绝不能**顺带建个窗口再收掉。
         """
         return bool(self.get_config or self.set_pairs)
+
+    @property
+    def import_only(self) -> bool:
+        """只导入一个 jar、不启动游戏（``--import``）。
+
+        和 ``--set`` 一样在入口、``import tkinter`` 之前就分派走 —— 导入要往
+        版本库里写几千个 CAS 对象，**绝不能**顺带建个窗口再收掉。它也拿同一
+        把进程锁：启动器开着时它的后台回收会撞上来（导入刚写进去、清单还没
+        落盘的那批对象，在它眼里是没有引用者的孤儿）。
+
+        ★ 没带 ``--as`` 时为假：那时 ``bad_usage`` 已经为真、入口会先答复，
+          这里再算「要导入」只会让调用方多一条要想的分支。
+        """
+        return bool(self.import_jar and self.import_name)
 
     @property
     def delete_only(self) -> bool:
@@ -269,17 +314,19 @@ def parse_cli(argv: list[str]) -> CliRequest:
     认的写法两种：``--launch <值>`` 和 ``--launch=<值>``（很多工具的直觉写法）。
     重复给时取**最后一个有效值**；中间写坏过一次、但另一次给对了，按对的来。
 
-    ★ 十二个开关**一次只做一件事**，优先级：
+    ★ 十五个开关**一次只做一件事**，优先级：
 
         ``--help`` → ``--list`` → ``--list-backups`` → ``--get`` → ``--set``
-        → ``--export`` → ``--export-backup`` → ``--delete-version`` /
-        ``--delete-backup`` → ``--launch``
+        → ``--export`` → ``--export-backup`` → ``--import`` →
+        ``--delete-version`` / ``--delete-backup`` → ``--launch``
 
       ``--help`` 是「问怎么用」，永远先回答；只读的排前面（看一眼有什么，
       不该先动起手来）；``--set`` 排在导出前面 —— 它只改一个 json，最快、
       也不占任何目录；导出不改任何状态，而启动会开着游戏占住存档目录。
-      ★ 删除排在导出**后面**：``--export-backup X --delete-backup X`` 于是
-      先导出再删 —— 想「留个副本再清掉」时顺序天然是对的。启动永远最后
+      ★ 导入排在导出**后面**、删除**前面**：整条顺序就是「只读 → 改配置 →
+      产出文件 → 往里加 → 往外毁 → 启动」，破坏性越大越靠后。
+      ★ 删除排在导出后面还有一层：``--export-backup X --delete-backup X``
+      于是先导出再删 —— 想「留个副本再清掉」时顺序天然是对的。启动永远最后
       （它会占住存档目录）。
       这条规则写进了 ``--help`` 的输出，不是隐藏行为。
     """
@@ -297,6 +344,10 @@ def parse_cli(argv: list[str]) -> CliRequest:
     delete_profile = ""
     delete_stamp = ""
     confirmed = False
+    # --import / --as / --type
+    import_jar = ""
+    import_name = ""
+    import_type = ""
     # --get / --set
     get_seen = False
     get_key = ""
@@ -413,6 +464,34 @@ def parse_cli(argv: list[str]) -> CliRequest:
             i += n
             continue
 
+        # --import <jar>：只取值，jar 在不在、是不是 zip、会不会覆盖同名版本
+        # 都交给 cli_import（那几件事要读磁盘，解析层只 import 标准库）。
+        if arg == IMPORT_FLAG or arg.startswith(IMPORT_FLAG + "="):
+            value, n = _value_of(argv, i, IMPORT_FLAG)
+            if value:
+                import_jar = value
+            else:
+                broken = broken or IMPORT_FLAG
+            i += n or 1
+            continue
+
+        # --as / --type：修饰词（和 --out / --yes 一个性质）。单独给不起作用，
+        # 所以这里写坏了也不记 broken —— 「给了 --import 却没给 --as」由下面
+        # 分派处统一判断，判断只留一处。
+        if arg == AS_FLAG or arg.startswith(AS_FLAG + "="):
+            value, n = _value_of(argv, i, AS_FLAG)
+            if value:
+                import_name = value
+            i += n or 1
+            continue
+
+        if arg == TYPE_FLAG or arg.startswith(TYPE_FLAG + "="):
+            value, n = _value_of(argv, i, TYPE_FLAG)
+            if value:
+                import_type = value
+            i += n or 1
+            continue
+
         # --delete-version <版本>：只取值，目标是否存在 / 撞名交给 cli_delete
         # （和 --launch 用同一套匹配规则，写法也一致）。
         if arg == DELETE_VERSION_FLAG or arg.startswith(DELETE_VERSION_FLAG + "="):
@@ -477,6 +556,22 @@ def parse_cli(argv: list[str]) -> CliRequest:
         return CliRequest(export=export, out=out)
     if profile:
         return CliRequest(export_profile=profile, export_backup=stamp, out=out)
+    # ★ 导入：jar 给了、版本号没给 → 按「参数写坏」答复（退出码 2），一个对象
+    #   都不写。版本号不许从文件名猜 —— ``Mindustry.jar`` 这种名字里根本没有
+    #   版本号，猜出来的名字会变成清单文件名，改起来还得先删一遍。
+    if import_jar:
+        if not import_name:
+            return CliRequest(
+                bad_usage=True,
+                bad_flag=AS_FLAG,
+                import_jar=import_jar,
+                import_type=import_type,
+            )
+        return CliRequest(
+            import_jar=import_jar,
+            import_name=import_name,
+            import_type=import_type or DEFAULT_VERSION_TYPE,
+        )
     # ★ 删除：**没有 --yes 就一个字节都不动**，按「参数写坏」答复（退出码 2）。
     #   命令行没有「你确定吗」那一下，把这个判断留在后面某处只会被忘掉；
     #   放在这里意味着任何删除都必经这道闸。目标仍然原样带在请求里，

@@ -19,7 +19,7 @@
 在这里解析成 ``CliRequest`` 再分派 —— 解析规则和「版本名怎么匹配」都在那边，
 本文件不掺和。
 
-★ 五类用法，轻重不同：
+★ 六类用法，轻重不同：
 
   * ``--list`` / ``--list-backups`` / ``--help`` / ``--get`` —— **只输出信息**。
     它们在 ``import tkinter`` **之前**就交给 ``launcher/cli_info.py``（``--get``
@@ -31,6 +31,10 @@
   * ``--export`` / ``--export-backup`` —— **只产出文件**。同样在 ``import
     tkinter`` 之前交给 ``launcher/cli_export.py``：拼 jar / zip 不需要界面，
     只是慢（版本那边要读几千个 CAS 对象）。
+  * ``--import <jar> --as <版本号>`` —— **只往版本库里加一个版本**。同样在
+    ``import tkinter`` 之前交给 ``launcher/cli_import.py``：写几千个 CAS 对象
+    不需要界面，只是慢。也拿同一把进程锁（启动器开着时它的后台回收会把这批
+    还没被清单引用上的对象当孤儿）。
   * ``--delete-version`` / ``--delete-backup`` —— **只删东西**。同样在
     ``import tkinter`` 之前交给 ``launcher/cli_delete.py``，也拿同一把进程锁
     （启动器开着时它内存里的列表还指着要删的记录）。**必须带 ``--yes``**，
@@ -129,6 +133,12 @@ def main() -> int:
         from launcher import cli_export
 
         code = cli_export.run(cli_request, has_console)
+    elif cli_request.import_only:
+        # ★ --import：同样不需要界面。这条路会往版本库里写几千个 CAS 对象，
+        #   还和 --set / --delete* 抢同一把锁（见 cli_import 的模块说明）。
+        from launcher import cli_import
+
+        code = cli_import.run(cli_request, has_console)
     elif cli_request.delete_only:
         # ★ --delete-version / --delete-backup：同样不需要界面。这条路会**删**
         #   磁盘上的记录，所以必须带 --yes（缺了在 parse_cli 里已成 bad_usage，

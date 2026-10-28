@@ -26,12 +26,15 @@ from pathlib import Path
 
 from . import console
 from .cli import (
+    DELETE_BACKUP_FLAG,
+    DELETE_VERSION_FLAG,
     EXIT_BAD_USAGE,
     EXIT_CRASH,
     EXIT_OK,
     EXPORT_BACKUP_FLAG,
     LAUNCH_FLAG,
     SET_FLAG,
+    YES_FLAG,
     CliRequest,
 )
 from .config import ConfigManager
@@ -129,9 +132,21 @@ def report_bad_usage(request: CliRequest, has_console: bool) -> int:
     ★ ``--export-backup`` 缺的是**分类名**不是版本名，话术不一样（见那个分支）；
       ``--set`` 缺的是「键=值」，而且「哪一项不是 键=值」和「一项都没给」
       也要分开说（``bad_token``）—— 前者多半是带空格的参数忘了加引号。
+    ★ ``bad_flag == --yes`` 是另一回事：删除**写全了**，只是没确认。这条不许
+      说成「参数写坏了」了事，要明确告诉用户「什么都没删，加 --yes 才动」。
+    ★ 两个删除目标同时给时 ``bad_note`` 直接指定文案（那条规则没有对应的
+      开关名可说，硬套任何一条现成话术都会说错）。
     """
     flag = request.bad_flag or LAUNCH_FLAG
-    if flag == SET_FLAG and request.bad_token:
+    if request.bad_note:
+        key = request.bad_note
+    elif flag == YES_FLAG:
+        key = "cli.bad_usage_delete"
+    elif flag == DELETE_VERSION_FLAG:
+        key = "cli.bad_usage_delete_version"
+    elif flag == DELETE_BACKUP_FLAG:
+        key = "cli.bad_usage_delete_backup"
+    elif flag == SET_FLAG and request.bad_token:
         key = "cli.set_bad_pair"
     elif flag == SET_FLAG:
         key = "cli.bad_usage_set"

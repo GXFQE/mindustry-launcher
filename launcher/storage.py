@@ -736,6 +736,42 @@ class BackupManager:
         )
         return output
 
+    def delete_backup(self, manifest_path: Path) -> int:
+        """删掉一个备份清单，并回收因此没人引用的对象，返回回收的对象数。
+
+        ★ 只删**清单**，不动对象池里的东西：备份 = 清单 + 共享的 CAS 对象，
+          同一个对象可能还被别的备份、甚至别的分类引用着。所以「删备份」只能
+          是「去掉这条引用，再让 GC 判断谁真的没人要了」—— 直接删目录会连带
+          毁掉别人的备份（``_cleanup_old_backups`` 里那句注释说的就是这件事）。
+        ★ 路径必须**真**落在本分类的 manifests 里。调用方一旦把命令行传进来的
+          路径原样交过来，``..\\..`` 就成了「按输入删任意文件」。版本那边靠
+          ``sanitize_version_name`` 挡住，这里靠下面这两条。
+        """
+        path = Path(manifest_path)
+        try:
+            resolved = path.resolve()
+            allowed = self.manifests_dir.resolve()
+        except OSError as e:
+            raise ValueError(
+                t("storage.backup_path_rejected", path=path)
+            ) from e
+        if (
+            resolved.parent != allowed
+            or not resolved.name.startswith("backup_")
+            or resolved.suffix != ".json"
+        ):
+            raise ValueError(t("storage.backup_path_rejected", path=path))
+
+        resolved.unlink(missing_ok=True)
+        removed = self.store.garbage_collect(
+            collect_referenced_objects(self.backup_base)
+        )
+        logger.info(
+            f"删除备份[分类:{self.profile_name}]: {resolved}，"
+            f"回收 {removed} 个对象"
+        )
+        return removed
+
     def get_backup_display(self, manifest_path: Path) -> str:
         """备份列表里显示的那一行。
 

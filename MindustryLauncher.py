@@ -13,11 +13,13 @@
 
 启动器自己的其它命令行参数（``--launch <版本>`` / ``--list`` / ``--list-backups``
 / ``--help`` / ``--get [<键>]`` / ``--set <键>=<值>`` / ``--export <版本>`` /
-``--export-backup <分类> [<时间戳>]`` / ``--out <路径>``，见 ``launcher/cli.py``）
+``--export-backup <分类> [<时间戳>]`` / ``--out <路径>`` /
+``--delete-version <版本>`` / ``--delete-backup <分类> [<时间戳>]`` /
+``--yes``，见 ``launcher/cli.py``）
 在这里解析成 ``CliRequest`` 再分派 —— 解析规则和「版本名怎么匹配」都在那边，
 本文件不掺和。
 
-★ 四类用法，轻重不同：
+★ 五类用法，轻重不同：
 
   * ``--list`` / ``--list-backups`` / ``--help`` / ``--get`` —— **只输出信息**。
     它们在 ``import tkinter`` **之前**就交给 ``launcher/cli_info.py``（``--get``
@@ -29,6 +31,10 @@
   * ``--export`` / ``--export-backup`` —— **只产出文件**。同样在 ``import
     tkinter`` 之前交给 ``launcher/cli_export.py``：拼 jar / zip 不需要界面，
     只是慢（版本那边要读几千个 CAS 对象）。
+  * ``--delete-version`` / ``--delete-backup`` —— **只删东西**。同样在
+    ``import tkinter`` 之前交给 ``launcher/cli_delete.py``，也拿同一把进程锁
+    （启动器开着时它内存里的列表还指着要删的记录）。**必须带 ``--yes``**，
+    漏写由解析层按参数写坏处理 —— 一条删除都不会执行。
   * ``--launch <版本>`` —— 要拉起游戏，得走完整条启动路径（界面照建、
     只是全程不露）。它和双击那条路有三处不同，都发生在这里：
 
@@ -123,6 +129,13 @@ def main() -> int:
         from launcher import cli_export
 
         code = cli_export.run(cli_request, has_console)
+    elif cli_request.delete_only:
+        # ★ --delete-version / --delete-backup：同样不需要界面。这条路会**删**
+        #   磁盘上的记录，所以必须带 --yes（缺了在 parse_cli 里已成 bad_usage，
+        #   走上面那条分支），而且和 --set 抢同一把锁。
+        from launcher import cli_delete
+
+        code = cli_delete.run(cli_request, has_console)
     else:
         from tkinter import messagebox
 

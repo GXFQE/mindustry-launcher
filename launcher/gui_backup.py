@@ -126,6 +126,31 @@ class BackupMixin:
                         t("common.error"), t("backup.rename_failed", err=e)
                     )
 
+        def do_delete() -> None:
+            """删掉选中的这一条备份。
+
+            ★ 只删**清单**：备份的数据对象放在共享池里，同一个对象可能还被
+              别的备份引用着 —— 真正的回收交给 ``delete_backup`` 里的 GC
+              判断。所以这里不能写成「删目录」，否则会连带毁掉别人的备份。
+            """
+            sel = listbox.curselection()
+            if not sel:
+                messagebox.showwarning(
+                    t("common.warning"), t("backup.select_first")
+                )
+                return
+            bp = backup_paths[sel[0]]
+            desc = manager.get_backup_display(bp)
+            if not messagebox.askyesno(
+                t("backup.delete_title"),
+                t("backup.delete_confirm", desc=desc),
+            ):
+                return
+            self.set_status(t("backup.deleting", desc=desc))
+            self.executor.submit(
+                self._delete_backup_task, manager, bp, desc, refresh
+            )
+
         ttk.Button(
             btn_frame, text=t("backup.now"), command=do_immediate_backup
         ).pack(side=tk.LEFT, padx=5)
@@ -135,6 +160,12 @@ class BackupMixin:
         ttk.Button(btn_frame, text=t("backup.note"), command=do_rename).pack(
             side=tk.LEFT, padx=5
         )
+        # ★ 删除放在最后（挨着「关闭」之前）：它和上面三个不是一类操作，
+        #   混在中间最容易点错。文案里把「只删这条备份记录」说清楚 ——
+        #   用户看到「删除」两个字，第一反应往往是「我的存档要没了吗」。
+        ttk.Button(
+            btn_frame, text=t("backup.delete"), command=do_delete
+        ).pack(side=tk.LEFT, padx=5)
         ttk.Button(
             btn_frame, text=t("common.close"), command=win.destroy
         ).pack(side=tk.RIGHT, padx=5)
@@ -160,6 +191,30 @@ class BackupMixin:
             self.run_on_gui(
                 lambda e=e: messagebox.showerror(
                     t("common.error"), t("backup.failed", err=e)
+                )
+            )
+
+    def _delete_backup_task(
+        self,
+        manager: BackupManager,
+        backup_path: Path,
+        desc: str,
+        refresh_cb,
+    ) -> None:
+        """删一条备份（含随后的对象回收）。
+
+        ★ 必须在线程池里跑：删完要扫一遍对象池（本项目 3 万+ 对象，十几秒），
+          放 GUI 线程上整个窗口会假死到扫完 —— 和手动备份、恢复同一个理由。
+        """
+        try:
+            manager.delete_backup(backup_path)
+            self.set_status(t("backup.deleted", desc=desc))
+            self.run_on_gui(lambda: self._safe_refresh(refresh_cb))
+        except Exception as e:
+            logger.error(f"删除备份失败: {e}")
+            self.run_on_gui(
+                lambda e=e: messagebox.showerror(
+                    t("common.error"), t("backup.delete_failed", err=e)
                 )
             )
 

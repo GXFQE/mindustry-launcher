@@ -446,6 +446,18 @@ REQUIRED = {
         "read_value", "write_value", "apply_pairs", "_read_disk", "_dig",
         "EXIT_BAD_USAGE", "EXIT_CONFIG_FAILED",
     ],
+    # 2026-10-28 新增：`--delete-version` / `--delete-backup` 的全部实现。
+    # ★ 这条路上一个 Tk 对象都不建；漏掉这个模块的症状是「删除命令没反应，
+    #   反而弹出启动器界面」—— 和 --help 那次一模一样，而且**会删错东西**
+    #   之前先建个窗口，用户还以为程序没听懂。
+    "launcher.cli_delete": [
+        "run",
+        # 两条删除路：版本 → 清单；备份 → 本分类清单（查表，绝不拼路径）
+        "_delete_version", "_delete_backup",
+        # 「没有这个版本」时的可用清单
+        "_not_found_text",
+        "EXIT_DELETE_FAILED", "EXIT_NO_VERSION",
+    ],
     # 2026-10-17 新增：配置写盘的进程间锁。★ 少了它，`--set` 会在启动器
     # 开着时照改，然后被对方退出时那次 save() 静默覆盖 —— 不报错、不留痕。
     "launcher.applock": [

@@ -612,6 +612,7 @@ def main():
     test_release_compat_layer()
     test_salvage_game_log()
     test_cli_launch_args()
+    test_backup_delete_guard()
     test_game_work_dir()
     test_packed_required_table()
     print("\n" + "=" * 60)
@@ -3765,6 +3766,56 @@ def test_cli_launch_args():
     check("--out 单独给 ⇒ 什么也不做（它只是别的开关的修饰词）",
           not r.used, str(r))
 
+    # ---- --delete-version / --delete-backup：删除（不可逆，必须 --yes） ----
+    r = req(["--delete-version", "Mindustry v146"])
+    check("★★ --delete-version 不带 --yes ⇒ 算参数写坏（一个字节都不许动），"
+          "bad_flag 点名是 --yes",
+          r.bad_usage and r.bad_flag == CLI.YES_FLAG
+          and r.delete_version == "Mindustry v146" and not r.delete_only, str(r))
+    r = req(["--delete-version", "Mindustry v146", "--yes"])
+    check("--delete-version + --yes ⇒ 只删版本（不启动、不建窗口）",
+          r.delete_version == "Mindustry v146" and r.delete_only
+          and r.confirmed and r.used, str(r))
+    r = req(["--delete-version=v146", "--yes"])
+    check("--delete-version=<名字> 等号写法同样认",
+          r.delete_version == "v146" and r.delete_only, str(r))
+    r = req(["--delete-backup", "默认"])
+    check("★★ --delete-backup 不带 --yes ⇒ 写坏（删除是这里唯一不可逆的动作）",
+          r.bad_usage and r.bad_flag == CLI.YES_FLAG
+          and r.delete_profile == "默认" and not r.delete_only, str(r))
+    r = req(["--delete-backup", "默认", "2026-09-20_16-35-32", "--yes"])
+    check("--delete-backup <分类> <时间戳> + --yes：两个位置参数都收下",
+          r.delete_profile == "默认"
+          and r.delete_stamp == "2026-09-20_16-35-32"
+          and r.delete_only and r.confirmed, str(r))
+    r = req(["--delete-backup", "默认", "--yes"])
+    check("★ --delete-backup 后面跟 --yes 时**不许**把它当成时间戳吞掉",
+          r.delete_profile == "默认" and r.delete_stamp == ""
+          and r.confirmed, str(r))
+    r = req(["--delete-version"])
+    check("--delete-version 缺值 ⇒ 写坏，bad_flag 指的是它（不是 --yes）",
+          r.bad_usage and r.bad_flag == CLI.DELETE_VERSION_FLAG, str(r))
+    r = req(["--delete-version", "--yes"])
+    check("★ --delete-version 后面直接跟 --yes ⇒ 仍算缺值（不把开关当版本名）",
+          r.bad_usage and r.bad_flag == CLI.DELETE_VERSION_FLAG, str(r))
+    r = req(["--delete-backup"])
+    check("--delete-backup 缺值 ⇒ 写坏，bad_flag 指出是它",
+          r.bad_usage and r.bad_flag == CLI.DELETE_BACKUP_FLAG, str(r))
+    r = req(["--delete-version", "v146", "--delete-backup", "默认", "--yes"])
+    check("★★ 两个删除目标同时给 ⇒ 报错、什么都不删"
+          "（只做一个等于悄悄丢掉一半）",
+          r.bad_usage and r.bad_note == "cli.delete_two_targets"
+          and not r.delete_only, str(r))
+    r = req(["--yes"])
+    check("--yes 单独给 ⇒ 什么也不做（它只是删除的修饰词）",
+          not r.used and not r.delete_only, str(r))
+    r = req(["--delete-version", "v146", "--yes", "--launch", "v146"])
+    check("★ 删除压过 --launch（要删就别顺手把游戏拉起来）",
+          r.delete_only and r.launch == "", str(r))
+    r = req(["--delete-version", "v146", "--yes", "--export", "v146"])
+    check("★ 导出压过删除（--export X --delete-version X ⇒ 先留副本，顺序天然安全）",
+          r.export == "v146" and not r.delete_only, str(r))
+
     # ---- --get / --set：看和改设置（同样不建窗口） ----
     r = req(["--get"])
     check("--get 单独给 ⇒ 列全部设置，且只算「改配置」这一类",
@@ -4007,6 +4058,12 @@ def test_cli_launch_args():
         n for n in ast.walk(main_def)
         if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.cfg_only"
     ]
+    # 删除那条路（--delete-version / --delete-backup）：同样不需要界面，
+    # 而且比导出更该早点分派 —— 它动的是磁盘上的记录，不能先建个窗口。
+    delete_if = [
+        n for n in ast.walk(main_def)
+        if isinstance(n, ast.If) and _dotted(n.test) == "cli_request.delete_only"
+    ]
     gui_import = [
         n for n in ast.walk(main_def)
         if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("gui")
@@ -4024,25 +4081,35 @@ def test_cli_launch_args():
     check("入口有一条 cli_request.cfg_only 分支，且真的调了 cli_cfg.run",
           len(cfg_if) == 1 and bool(_calls_named(cfg_if[0], "cli_cfg.run")),
           f"{len(cfg_if)} 条")
+    check("入口有一条 cli_request.delete_only 分支，且真的调了 cli_delete.run",
+          len(delete_if) == 1
+          and bool(_calls_named(delete_if[0], "cli_delete.run")),
+          f"{len(delete_if)} 条")
     check("★ 入口**先拦参数写坏**（--export 缺值时不许掉进界面分支去闪一下窗口）",
           len(bad_if) == 1
           and bool(_calls_named(bad_if[0], "cli_info.report_bad_usage")),
           f"{len(bad_if)} 条")
-    check("……四条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出",
+    check("……五条分支的先后顺序是 写坏 → 只输出 → 改配置 → 导出 → 删除",
           len(bad_if) == 1 and len(info_if) == 1 and len(cfg_if) == 1
-          and len(export_if) == 1
+          and len(export_if) == 1 and len(delete_if) == 1
           and bad_if[0].lineno < info_if[0].lineno
-          < cfg_if[0].lineno < export_if[0].lineno,
+          < cfg_if[0].lineno < export_if[0].lineno < delete_if[0].lineno,
           f"{bad_if[0].lineno if bad_if else '?'} / "
           f"{info_if[0].lineno if info_if else '?'} / "
           f"{cfg_if[0].lineno if cfg_if else '?'} / "
-          f"{export_if[0].lineno if export_if else '?'}")
+          f"{export_if[0].lineno if export_if else '?'} / "
+          f"{delete_if[0].lineno if delete_if else '?'}")
     # ★ 真机实测抓到的：这一分支原来是 `return cli_info.run(...)`，于是
     #   `--list` / `--help` 输出完就没了下文 —— 跳过下面那行「启动器已退出
     #   （退出码 N）」。用户看到的是「输出完就停住」，和 `--launch` 的收尾
     #   约定不一致（那一行是 cmd 不等待窗口程序时唯一的「结束了」信号）。
     #   所以：这几条分支里都不许有 return，全函数只留最后那一个。
-    branches = [b for b in (bad_if[:1] + info_if[:1] + cfg_if[:1] + export_if[:1])]
+    branches = [
+        b for b in (
+            bad_if[:1] + info_if[:1] + cfg_if[:1] + export_if[:1]
+            + delete_if[:1]
+        )
+    ]
     branch_returns = [
         n for b in branches for n in ast.walk(b) if isinstance(n, ast.Return)
     ]
@@ -4594,6 +4661,72 @@ def test_packed_required_table():
     names = names_of(compile(p.read_text(encoding="utf-8"), str(p), "exec"))
     check("反向对照：喂一个不存在的符号会被报出来（否则第 ③ 条等于没查）",
           [s for s in fake["launcher.cli"] if s not in names] == ["这个符号不可能存在"])
+
+
+# ------------- 25. 删除备份的安全边界（路径校验 + 只删清单） -------------
+def test_backup_delete_guard():
+    """``BackupManager.delete_backup``：只许删本分类的备份清单。
+
+    ★ 为什么单列：这个方法的参数最终来自命令行 / 界面列表，一旦允许它按
+      「传进来的路径」删文件，``..\\..\\config.json`` 就成了「按输入删任意
+      文件」。路径校验比删除本身更要紧，所以这里用临时目录把边界钉住 ——
+      真删、真检查，绝不在用户数据上试。
+
+    第二条要钉住的是「只删清单」：备份的数据对象在共享池里，删一条清单时
+    绝不能顺手把对象也删了 —— 同一个对象可能还被别的备份（甚至别的分类）
+    引用着。
+    """
+    print("\n[25] 删除备份：路径校验与「只删清单」")
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td) / "backups"
+        store = S.CASStore(base)
+        manager = S.BackupManager(store, None, base, "默认")
+
+        shared = store.store_file(b"shared")
+        only_here = store.store_file(b"only-here")
+        older = manager.manifests_dir / "backup_2026-01-01_00-00-00.json"
+        newer = manager.manifests_dir / "backup_2026-01-02_00-00-00.json"
+        older.write_text(
+            json.dumps({"files": {"a": shared, "b": only_here}}),
+            encoding="utf-8",
+        )
+        newer.write_text(
+            json.dumps({"files": {"a": shared}}), encoding="utf-8"
+        )
+
+        # ① 正常删除：只掉这一条
+        manager.delete_backup(older)
+        check("删掉指定的那一条清单", not older.exists())
+        check("★ 只删这一条：同分类其它备份原样在", newer.exists())
+        check("★ 不碰共享对象（它还被另一条备份引用着）",
+              store._object_path(shared).exists())
+        check("……连「只被它引用」的对象也不当场狠删"
+              "（GC 有 600 s 保护期，防的是正在写的导入/备份）",
+              store._object_path(only_here).exists())
+
+        # ② 边界：越界路径一律拒绝
+        outside = Path(td) / "config.json"
+        outside.write_text("{}", encoding="utf-8")
+        cases = (
+            (outside, "备份目录之外的文件"),
+            (manager.manifests_dir / ".." / "config.json", "用 .. 爬到上层"),
+            (manager.manifests_dir / "notabackup.json",
+             "不是 backup_ 开头的清单"),
+            (manager.manifests_dir / "backup_x.txt", "后缀不是 .json"),
+        )
+        for bad, label in cases:
+            check(f"★ 拒绝删除：{label}",
+                  _raises(lambda b=bad: manager.delete_backup(b), ValueError))
+        check("……被拒绝的路径真的还在（没有「先删了再说」）", outside.exists())
+
+        other = S.BackupManager(store, None, base, "另一个分类")
+        check("★ 别的分类的清单也不许借这个对象删",
+              _raises(
+                  lambda: manager.delete_backup(
+                      other.manifests_dir / "backup_2026-01-03_00-00-00.json"
+                  ),
+                  ValueError,
+              ))
 
 
 # --------------------------------------- 12x. 游戏进程的工作目录（真踩过）

@@ -7,8 +7,9 @@ For people who already have it running and want the details. **What it is and ho
 
 ## Command line
 
-Everything the GUI does has a console counterpart — handy in scripts and shortcuts, or when you would
-rather not open a window at all.
+Most of what the GUI does has a console counterpart — handy in scripts and shortcuts, or when you would
+rather not open a window at all. (Importing a jar, restoring a backup and renaming a version are
+GUI-only; deleting a save profile is deliberately GUI-only, because it takes three confirmations.)
 
 | Switch | What it does |
 |---|---|
@@ -20,6 +21,9 @@ rather not open a window at all.
 | `--set key=value …` | Change settings (writes `config.json` only, effective on the next start; several at once) |
 | `--export <version>` | Pack a version into a jar you can run with `java -jar`; accepts `--out` |
 | `--export-backup <profile> [timestamp]` | Pack one backup into a zip (omitting the timestamp means the newest); accepts `--out` |
+| `--delete-version <version>` | Delete a version (manifest plus unreferenced objects). **Needs `--yes`** |
+| `--delete-backup <profile> [timestamp]` | Delete one backup (omitting the timestamp means the newest). **Needs `--yes`** |
+| `--yes` | Confirm a delete. Without it a delete does nothing at all |
 | `--help` | Usage, exit codes and a few caveats |
 
 ```bat
@@ -36,8 +40,9 @@ rather not open a window at all.
 ### Must-knows
 
 - **One task per run**, priority: `--help` → `--list` → `--list-backups` → `--get` → `--set` →
-  `--export` → `--export-backup` → `--launch` (read-only first; export before launch — export changes
-  no state, while a launch holds the save directory).
+  `--export` → `--export-backup` → `--delete-version` / `--delete-backup` → `--launch` (read-only
+  first; export before launch — export changes no state, while a launch holds the save directory;
+  delete after export, so `--export-backup X --delete-backup X` copies before it removes).
 - **A version name** is the row shown in the version list (`Mindustry v146`, `BE v146`); the bare
   number (`v146`) works too as long as only one type has it — an ambiguous name tells you to write it
   out. A mistyped name, or `--launch` with nothing after it, **starts nothing** and lists what is
@@ -64,11 +69,39 @@ rather not open a window at all.
 |---|---|
 | `0` | Finished normally (a finished game counts) |
 | `1` | The launcher itself failed |
-| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`) |
+| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete without `--yes`) |
 | `3` | No such version / no such backup |
 | `4` | Version found, but the game did not start |
 | `5` | Export failed (while packing the jar / zip) |
 | `6` | Could not write the config (launcher running / disk refused / read-back mismatch) |
+| `7` | Delete failed (manifest locked or still there after read-back; the launcher was running) |
+
+### Deleting a version or a backup
+
+Deleting is the one irreversible operation here, so it is gated twice: an explicit `--yes`, and the
+launcher must be closed.
+
+```bat
+:: Delete a version (and reclaim objects nothing references any more)
+"Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+
+:: Delete the newest backup of a profile
+"Mindustry启动器.exe" --delete-backup 默认 --yes
+
+:: Delete one specific backup (timestamps come from --list-backups)
+"Mindustry启动器.exe" --delete-backup 默认 2026-09-20_16-35-32 --yes
+```
+
+- **Without `--yes` nothing happens** — exit code `2`, not a single file touched. A console command
+  that scripts run cannot afford an interactive "are you sure".
+- **Only the manifest is deleted; your saves are not touched.** Data objects live in a shared pool, so
+  they are reclaimed only once nothing else references them (another backup, another profile).
+- **Refused while the launcher is open** (exit code `6`): its in-memory version/backup lists still
+  point at what you are deleting. Close it and run again.
+- The reclamation pass walks the whole object pool (tens of thousands of objects, roughly ten seconds
+  on a typical install), so a delete takes noticeably longer than a listing.
+- A backup is addressed by a **profile and timestamp that exist on disk**: the profile name is looked
+  up in what was just scanned, never joined into a path, so `..` cannot escape the backup directory.
 
 ### Changing settings with `--set`
 

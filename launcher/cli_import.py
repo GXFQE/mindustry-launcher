@@ -40,14 +40,34 @@ from .cli import (
     EXIT_IMPORT_FAILED,
     EXIT_OK,
     CliRequest,
+    compare_form,
 )
 from .cli_info import acquire_data_lock, command_name, load_config, say
 from .config import ConfigManager, sanitize_version_name
 from .i18n import apply_setting, t
-from .storage import open_version_manager
+from .storage import VersionManager, open_version_manager
 from .utils import BASE_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_type(manager: VersionManager, wanted: str) -> str:
+    """把 ``--type`` 的写法对齐到库里**已有**的类型。
+
+    类型名会拼进清单文件名，也是列表里 ``Mindustry 146`` 的前半截。
+    ``--type mindustry`` 若原样使用，就会在 ``Mindustry`` 之外多出一个看着
+    一模一样的「类型」，列表里出现两组版本、存档目录也跟着分家。
+
+    只在**唯一**对上（大小写 / 全角 / 空格差异）时沿用库里的写法；对不上
+    （真的想新建一个类型）就按用户写的来 —— 仍然不猜。
+    """
+    key = compare_form(wanted)
+    same = {
+        str(v.get("type", ""))
+        for v in manager.get_versions()
+        if compare_form(v.get("type", "")) == key
+    }
+    return same.pop() if len(same) == 1 else wanted
 
 
 def _import_version(
@@ -73,6 +93,7 @@ def _import_version(
         return EXIT_IMPORT_FAILED, t("cli.import_jar_missing", name=name, path=jar)
 
     manager = open_version_manager(BASE_DIR, config)
+    vtype = _canonical_type(manager, vtype)
     manifest = manager.manifest_path(vtype, ver)
     if manifest.exists():
         # 不覆盖 —— 见模块说明第 2 条。想让位就先 --delete-version，或者换个 --as。

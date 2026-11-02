@@ -166,23 +166,29 @@ class Target:
 
 
 def resolve(raw: str) -> Target:
-    """把 ``key`` / ``jvm.key`` / ``profile.<分类>.key`` 解析成 ``Target``。"""
+    """把 ``key`` / ``jvm.key`` / ``profile.<分类>.key`` 解析成 ``Target``。
+
+    ★ 键名与 ``jvm.`` / ``profile.`` 前缀**不分大小写**（``--get JVM.MAX_MEM``
+      也能用）：键是固定的标识符，用户手打时按了 CapsLock 不该被当成写错。
+      **分类名保持原样** —— 那是用户自己起的数据，不能替它折大小写。
+    """
     name = (raw or "").strip()
     if not name:
         raise BadKey(name)
-    if name.startswith("jvm."):
-        spec = _JVM_BY_KEY.get(name[len("jvm."):])
+    low = name.casefold()
+    if low.startswith("jvm."):
+        spec = _JVM_BY_KEY.get(low[len("jvm."):].strip())
         if spec is None:
             raise BadKey(name)
         return Target(spec)
-    if name.startswith("profile."):
+    if low.startswith("profile."):
         rest = name[len("profile."):]
         profile, sep, key = rest.rpartition(".")
-        spec = _PROFILE_BY_KEY.get(key)
-        if not sep or not profile or spec is None:
+        spec = _PROFILE_BY_KEY.get(key.strip().casefold())
+        if not sep or not profile.strip() or spec is None:
             raise BadKey(name)
-        return Target(spec, profile=profile)
-    spec = _GLOBAL_BY_KEY.get(name)
+        return Target(spec, profile=profile.strip())
+    spec = _GLOBAL_BY_KEY.get(low)
     if spec is None:
         raise BadKey(name)
     return Target(spec)

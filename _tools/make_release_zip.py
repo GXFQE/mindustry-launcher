@@ -420,7 +420,8 @@ the "ENGLISH" line further down.
 
 版本名就是主界面列表里显示的那一行（Mindustry 146、BE v7 这样）；
 只写版本号（146、v7）也行 —— 前提是它只属于一个类型，撞名会告诉你要写全名。
-版本号前的 v 可带可不带（v146 与 146 等价）。
+写法上的小差异不用管：不分大小写、多打几个空格、全角输入、版本号前的 v
+带不带（v146、146、Mindustry146）都认；但数字得写全（14 不会当成 146）。
 
 记不清版本名？先列一下：
 
@@ -801,7 +802,9 @@ the game:
 The version name is the line shown in the main window's list (Mindustry 146,
 BE v7, ...). Just the version number (146, v7) works too -- as long as only one
 type has it; if several do, it asks you to spell out the full name instead.
-A leading v is optional (v146 and 146 are the same).
+Small differences in spelling are smoothed over: case, extra spaces, full-width
+characters, and a leading v (v146, 146, Mindustry146). Digits must be exact --
+14 never matches 146.
 
 Can't remember the name? List them first:
 

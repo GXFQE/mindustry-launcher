@@ -53,9 +53,12 @@ deleting a save profile is deliberately GUI-only, because it takes three confirm
   only the first would silently drop the other half.
 - **A version name** is the row shown in the version list (`Mindustry 146`, `BE v7`); the bare
   number (`146`, `v7`) works too as long as only one type has it — an ambiguous name tells you to
-  write it out. A leading `v` is **optional** (`v146` and `146` are the same: downloaded version
-  numbers come from GitHub tags with the `v` removed, and both forms are accepted). A mistyped name,
-  or `--launch` with nothing after it, **starts nothing** and lists what is available.
+  write it out. Before comparing, differences in *spelling* are smoothed over: **case is ignored,
+  runs of spaces count as one, full-width characters are folded to half-width**, and a leading `v`
+  is **optional** (`v146`, `146` and `Mindustry146` all work: downloaded version numbers come from
+  GitHub tags with the `v` removed, while the old docs always showed the `v`). Digits must still be
+  exact — `14` never matches `146`. A name that does not match, or `--launch` with nothing after
+  it, **starts nothing** and lists what is available.
 - **No window**: progress and results go to the console you typed in — which version is starting, when
   it came up (with the time it took), when the game exits (with how long you played), and whether a
   backup was made.

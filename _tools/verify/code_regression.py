@@ -3790,6 +3790,39 @@ def test_cli_launch_args():
           not r.used and not r.import_only, str(r))
     r = req(["--type", "MindustryX"])
     check("--type 单独给 ⇒ 什么也不做（同上）", not r.used, str(r))
+
+    # ★ --type 只是写法不同（大小写 / 全角 / 多余空格）时，必须并到库里已有的
+    #   类型上 —— 否则 ``--type mindustry`` 会静默多出一个和 Mindustry 并列的
+    #   「类型」：列表里两组看着一样的版本，存档目录也跟着分家。
+    from launcher.cli_import import _canonical_type
+
+    class _FakeManager:
+        def __init__(self, types):
+            self._types = types
+
+        def get_versions(self):
+            return [{"type": t} for t in self._types]
+
+    fake = _FakeManager(["Mindustry", "MindustryX", "BE"])
+    for given, want in (
+        ("mindustry", "Mindustry"),
+        ("MINDUSTRY", "Mindustry"),
+        ("Ｍｉｎｄｕｓｔｒｙ", "Mindustry"),
+        (" mindustry ", "Mindustry"),
+        ("mindustryx", "MindustryX"),
+        ("be", "BE"),
+    ):
+        got = _canonical_type(fake, given)
+        check(f"★ --type 写法不同但指的是已有类型：{given!r} ⇒ {want}",
+              got == want, got)
+    check("★ --type 认不出来就按用户写的建（不猜、也不强行改）",
+          _canonical_type(fake, "新的类型") == "新的类型")
+    check("……空库时原样保留（第一次导入就是它定义类型）",
+          _canonical_type(_FakeManager([]), "mindustry") == "mindustry")
+    check("……库里真有两个只差大小写的类型时也不替用户选",
+          _canonical_type(
+              _FakeManager(["Mindustry", "mindustry"]), "MINDUSTRY"
+          ) == "MINDUSTRY")
     r = req(["--import", "a.jar", "--as", "146", "--out", r"D:\x"])
     check("--import 混进 --out ⇒ 正常导入（--out 是别的开关的修饰词，忽略即可）",
           r.import_only and r.import_name == "146", str(r))
@@ -3978,6 +4011,22 @@ def test_cli_launch_args():
     check("profile..max_backups（分类名为空）⇒ 当成未知键",
           _raises(lambda: CLI_CFG.resolve("profile..max_backups"),
                   CLI_CFG.BadKey))
+    # ★ 键名是固定标识符：手打时 CapsLock / 全角不该被当成「写错」。
+    #   分类名是**用户数据**，只认原样，不替他折大小写。
+    for key, want in (
+        ("HIDE_ON_LAUNCH", "hide_on_launch"),
+        (" Hide_On_Launch ", "hide_on_launch"),
+        ("JVM.JRE_PATH", "jre_path"),
+        ("Profile.默认.MAX_BACKUPS", "max_backups"),
+    ):
+        target = CLI_CFG.resolve(key)
+        check(f"★ 键名不分大小写：{key!r} ⇒ {want}",
+              target.key == want, str(target))
+    check("……分类名保持原样（不跟着折大小写）",
+          CLI_CFG.resolve("profile.默认.Max_Backups").profile == "默认")
+    check("……但键名大小写容错不会把不开放的键放进来",
+          _raises(lambda: CLI_CFG.resolve("JVM.VM_ARGS"),
+                  CLI_CFG.BadKey))
 
     # ---- 值的严格解析：坏值必须抛，**绝不**退默认 ----
     spec_int = next(s for s in CLI_CFG.GLOBAL_SPECS
@@ -4155,6 +4204,42 @@ def test_cli_launch_args():
     hit, cand = CLI.match_version(exact, "Mindustry 146")
     check("……不带 v 的写法命中的是不带 v 的那个（不会被容错搅成撞名）",
           hit is exact[0] and cand == [], str((hit, cand)))
+
+    # ★★ 用户手里的名字不会总是「标准形态」：大小写、多打的空格、Tab、
+    #    不换行空格、中文输入法的全角 —— 都只是**同一个名字的不同写法**。
+    #    抹平它们是本分；抹平之后仍然只认整串相等（数字不许糊）。
+    loose = [
+        {"name": "Mindustry 160.7", "raw_version": "160.7"},
+        {"name": "MindustryX 2025.10.X20", "raw_version": "2025.10.X20"},
+        {"name": "MDTv2 1.0", "raw_version": "1.0"},
+    ]
+    for q, label in (
+        ("mindustry 160.7", "大小写"),
+        ("  Mindustry  160.7  ", "多打的空格"),
+        ("Mindustry\t160.7", "Tab"),
+        ("Mindustry\u00a0160.7", "不换行空格"),
+        ("Ｍｉｎｄｕｓｔｒｙ\u3000160.7", "全角（中文输入法）"),
+        ("Mindustry160.7", "漏了空格"),
+        ("Ｍｉｎｄｕｓｔｒｙｖ１６０.７", "全角 + 漏空格 + 带 v"),
+        ("mindustryv160.7", "半角漏空格 + 带 v"),
+    ):
+        hit, cand = CLI.match_version(loose, q)
+        check(f"★ 写法差异不影响命中：{label}（{q!r}）",
+              hit is loose[0] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(loose, "Ｍｉｎｄｕｓｔｒｙｘ２０２５.１０.Ｘ２０")
+    check("……全角的 MindustryX 也认（不能只对第一个类型生效）",
+          hit is loose[1] and cand == [], str((hit, cand)))
+    for q in ("Mindustry 160", "Mindustry 1607", "160", "Mindustry v14"):
+        hit, cand = CLI.match_version(loose, q)
+        check(f"★ 放宽的只是写法、不是数字：{q!r} 仍然不命中",
+              hit is None and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(loose, "MDT2 1.0")
+    check("★ 类型名里自带的 v 是数据本身：少打一个 v ≠ 同一个版本",
+          hit is None and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(loose, "mdtv2 1.0")
+    check("……但大小写 / 全角这些照样抹平（MDTv2 本身仍能命中）",
+          hit is loose[2] and cand == [], str((hit, cand)))
+
     hit, cand = m("不存在")
     check("找不到 ⇒ (None, [])，由调用方去列可用版本",
           hit is None and cand == [], str((hit, cand)))
@@ -4799,7 +4884,7 @@ def test_cli_launch_args():
         elif isinstance(n, ast.ImportFrom):
             imported.add(n.module or "")
     check("参数模块只 import 标准库（不 import 包内模块 ⇒ 谁都能安全 import）",
-          imported <= {"__future__", "dataclasses", "re", "typing"},
+          imported <= {"__future__", "dataclasses", "re", "typing", "unicodedata"},
           str(sorted(imported)))
 
 

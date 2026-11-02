@@ -19,8 +19,11 @@
     让启动器**直接**启动指定版本，省掉「选中 → 点启动 → 点确认」。
     版本名就是主界面列表里显示的那一行（如 ``Mindustry 146`` / ``BE v7``）；
     也可以只写版本号本身（如 ``146``），前提是它只属于一个类型。
-    ★ 版本号前的 ``v`` 可带可不带（``v146`` 与 ``146`` 等价）—— 下载来的
-      版本号按 GitHub tag 去掉了 ``v``，而旧文档一直写的是带 ``v`` 的样子。
+    ★ 写法差异会先被抹平再比：不分大小写、连续空格算一个、全角转半角，
+      版本号前的 ``v`` 也可省（``v146`` / ``146`` / ``Mindustry146`` 都认）——
+      下载来的版本号按 GitHub tag 去掉了 ``v``，而旧文档一直写的是带 ``v`` 的样子。
+    ★ 但数字必须写全（``14`` 不会当成 ``146``）：版本决定用哪一套存档目录，
+      写歪了不会去猜，只会说没找到并列出可用版本。
 
 ``--list``
     列出本机已有的版本（就是列表里那些行）。想知道 ``--launch`` 该写什么
@@ -109,6 +112,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -742,7 +746,27 @@ def parse_cli(argv: list[str]) -> CliRequest:
 #: 版本号前面那个可选的 ``v``（``v160.7`` / ``Mindustry v160.7``）。
 #: ★ 只认「v 紧跟数字、且前面是开头或空白」—— 类型名里自带的（``MDTv2``）
 #:   不能被当成前缀抹掉，否则等于悄悄改了用户起的名字。
-_V_PREFIX = re.compile(r"(^|\s)[vV](?=\d)")
+_V_PREFIX = re.compile(r"(^|\s)v(?=\d)")
+
+#: 连续空白（空格 / Tab / 不换行空格……）。
+_SPACE_RUN = re.compile(r"\s+")
+
+
+def compare_form(text: Any) -> str:
+    """把「库里的名字 / 版本号 / 用户敲的输入」折成**同一种用于比对**的形态。
+
+    只抹平「同一个名字的不同写法」，**不做任何模糊匹配**：
+
+    * **NFKC**：中文输入法很容易打出全角字母与数字（``Ｍｉｎｄｕｓｔｒｙ　160.7``），
+      不换行空格（``\\xa0``）也一并折成半角 —— 用户眼里它们就是同一个名字；
+    * **空白折叠**：连续空格 / Tab 一律算一个分隔符 —— 手抖多按一下空格
+      不该变成「找不到这个版本」；
+    * **casefold**：大小写不敏感（``mindustry`` ≡ ``Mindustry``）。
+
+    ★ 数字与点仍然逐字符比：``14`` 绝不会命中 ``146``。
+    """
+    s = unicodedata.normalize("NFKC", str(text or ""))
+    return _SPACE_RUN.sub(" ", s).strip().casefold()
 
 
 def _without_v_prefix(text: str) -> str:
@@ -753,68 +777,97 @@ def _without_v_prefix(text: str) -> str:
     return _V_PREFIX.sub(r"\1", text)
 
 
+def _without_spaces(text: str) -> str:
+    """抹掉全部空白，**只用于比对** —— 给「类型和版本号之间漏了空格」兜底。"""
+    return text.replace(" ", "")
+
+
+#: 类型名与 ``v`` 粘在一起的写法（``mindustryv160.7``）—— 全角输入又漏了空格
+#: 时会出现。★ v **必须夹在字母与数字之间**：类型名里自带的（``MDTv2``）不会被误抹。
+_GLUED_V = re.compile(r"(?<=[a-z])v(?=\d)")
+
+
+def _without_glued_v(text: str) -> str:
+    """去掉「粘在类型名后面的 v」，**只用于比对**（``mindustryv160.7`` → ``mindustry160.7``）。"""
+    return _GLUED_V.sub("", text)
+
+
+#: 逐层放宽的比对形态：``(库里的名字怎么折, 用户输入怎么折)``。
+#: **顺序有意义**：先严后宽，越靠前命中越可信。
+#: ★ 每一层内部仍然是「整串相等」，不是包含 / 前缀 / 相似度。
+_MATCH_TIERS = (
+    # ① 原样
+    (lambda s: s, lambda s: s),
+    # ② v 可省
+    (_without_v_prefix, _without_v_prefix),
+    # ③ 空格可省
+    (_without_spaces, _without_spaces),
+    # ④ 两者都可省
+    (
+        lambda s: _without_v_prefix(_without_spaces(s)),
+        lambda s: _without_v_prefix(_without_spaces(s)),
+    ),
+    # ⑤ 只有**输入侧**再多抹一个「粘在类型名后面的 v」（全角 + 漏空格时会出现）。
+    #    ★ 库里的名字一侧不抹：类型名真叫 ``MDTv2`` 时，它是数据的一部分，
+    #      不能因为用户少打一个 v 就当成同一个版本。
+    (
+        lambda s: _without_v_prefix(_without_spaces(s)),
+        lambda s: _without_glued_v(_without_spaces(s)),
+    ),
+)
+
+
 def match_version(
     versions: list[dict[str, Any]], query: str
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """按名字找版本，返回 ``(命中的版本 | None, 候选名清单)``。
 
-    规则按顺序，取第一个成立的：
+    规则：名字会先折成**同一种比对形态**（全角转半角、连续空白算一个、
+    不分大小写），再**逐层放宽**比较，取第一个命中的层：
 
-    1. **显示名**精确相同（不分大小写、忽略两端空白）—— 就是列表里那一行；
-    2. 否则**原始版本号**精确相同（``160.7`` 这种，即不带类型前缀的写法）；
-    3. 否则把**两侧**版本号前的 ``v`` 都去掉再比一次
-       （``v160.7`` ≡ ``160.7``、``Mindustry v160.7`` ≡ ``Mindustry 160.7``）。
+    1. **原样**：显示名精确相同 → 原始版本号精确相同；
+    2. **v 可省**：两侧版本号前的 ``v`` 都去掉再比
+       （``v160.7`` ≡ ``160.7``、``Mindustry v160.7`` ≡ ``Mindustry 160.7``）；
+    3. **空格可省**：两侧空白全抹掉再比（``Mindustry160.7`` ≡ ``Mindustry 160.7``）；
+    4. 两者都可省。
 
-    ★ 第 3 条是补历史口径：下载来的版本号取自 GitHub tag 并去掉了 ``v``
+    ★ 第 2 条补的是历史口径：下载来的版本号取自 GitHub tag 并去掉了 ``v``
       （列表里是 ``Mindustry 160.7``），而帮助 / 文档长期写的是带 ``v`` 的
       ``Mindustry v160.7``。用户照着抄，明明列表里有、却被告知「找不到」。
-    ★ 前两条仍是**原样精确**：库里真的同时装了 ``146`` 和 ``v146`` 时，
-      用户写哪个就命中哪个，不会被第 3 条搅成「撞名」。
-    ★ 第 3 条也只做**精确等价**，不做前缀/模糊匹配：``Mindustry v14``
+    ★ 第 1 层仍是**原样精确**：库里真的同时装了 ``146`` 和 ``v146`` 时，
+      用户写哪个就命中哪个，不会被放宽层搅成「撞名」。
+    ★ 每一层内部比对的是**整串**，不是前缀 / 包含 / 相似度：``Mindustry v14``
       不会命中 ``Mindustry 146``（版本决定用哪套存档目录，猜错＝写错地方）。
 
     返回的两个值合起来有三种含义：
 
     * ``(版本, [])`` —— 找到了，唯一；
-    * ``(None, [名字…])`` —— 撞名：这个版本号在多个类型里都有，**不猜**，
+    * ``(None, [名字…])`` —— 撞名：这个写法在多个版本上成立，**不猜**，
       交给调用方提示用户写全名；
     * ``(None, [])`` —— 没有这个版本。
 
     两种都返回 None 时，调用方拿 ``available_names()`` 列可用的给用户看。
     """
-    q = (query or "").strip().casefold()
+    q = compare_form(query)
     if not q:
         return None, []
-    same_name = [
-        v for v in versions if str(v.get("name", "")).strip().casefold() == q
-    ]
-    if len(same_name) == 1:
-        return same_name[0], []
-    if len(same_name) > 1:
-        return None, [str(v.get("name", "")) for v in same_name]
-    same_raw = [
-        v for v in versions
-        if str(v.get("raw_version", "")).strip().casefold() == q
-    ]
-    if len(same_raw) == 1:
-        return same_raw[0], []
-    if len(same_raw) > 1:
-        return None, [str(v.get("name", "")) for v in same_raw]
 
-    # 3. v 前缀可省：两边都按「去掉 v」的形态再比一次（仍然只认精确等价）。
-    relaxed = _without_v_prefix(q)
-    tolerant = [
-        v for v in versions
-        if relaxed in {
-            _without_v_prefix(str(v.get("name", "")).strip().casefold()),
-            _without_v_prefix(
-                str(v.get("raw_version", "")).strip().casefold()
-            ),
-        }
-    ]
-    if len(tolerant) == 1:
-        return tolerant[0], []
-    return None, [str(v.get("name", "")) for v in tolerant]
+    for shape_store, shape_query in _MATCH_TIERS:
+        want = shape_query(q)
+        if not want:
+            continue
+        # 同一层里先比显示名、再比原始版本号：库里真有 ``146`` 与 ``v146``
+        # 两个不同版本时，「写哪个命中哪个」优先于「放宽后撞名」。
+        for field in ("name", "raw_version"):
+            same = [
+                v for v in versions
+                if shape_store(compare_form(v.get(field, ""))) == want
+            ]
+            if len(same) == 1:
+                return same[0], []
+            if len(same) > 1:
+                return None, [str(v.get("name", "")) for v in same]
+    return None, []
 
 
 def available_names(

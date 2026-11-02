@@ -416,10 +416,11 @@ the "ENGLISH" line further down.
 在控制台里（cmd、PowerShell、Windows 终端都行）加上参数，就直接进那个版本，
 全程不出现启动器窗口 —— 屏幕上只会看到游戏：
 
-    "Mindustry启动器.exe" --launch "Mindustry v146"
+    "Mindustry启动器.exe" --launch "Mindustry 146"
 
-版本名就是主界面列表里显示的那一行（Mindustry v146、BE v146 这样）；
-只写版本号（v146）也行 —— 前提是它只属于一个类型，撞名会告诉你要写全名。
+版本名就是主界面列表里显示的那一行（Mindustry 146、BE v7 这样）；
+只写版本号（146、v7）也行 —— 前提是它只属于一个类型，撞名会告诉你要写全名。
+版本号前的 v 可带可不带（v146 与 146 等价）。
 
 记不清版本名？先列一下：
 
@@ -467,7 +468,7 @@ the "ENGLISH" line further down.
 
 · 把一个游戏版本拼成 jar —— 拿到别的机器上能直接 java -jar
 
-      "Mindustry启动器.exe" --export "Mindustry v146"
+      "Mindustry启动器.exe" --export "Mindustry 146"
 
 · 把一个存档备份拼成 zip —— 省略时间戳 = 该分类最新那个
 
@@ -484,7 +485,7 @@ the "ENGLISH" line further down.
 文件默认写到当前目录，名字是「类型_版本号.jar」/「分类_时间戳.zip」。想放到
 别处就加 --out（可以是一个文件路径，也可以是一个已存在的目录）：
 
-    "Mindustry启动器.exe" --export "Mindustry v146" --out D:\分享\
+    "Mindustry启动器.exe" --export "Mindustry 146" --out D:\分享\
 
 同名文件不会被覆盖：已经有一个同名的，会自动变成 ..._2.jar、..._3.jar。
 
@@ -510,7 +511,7 @@ the "ENGLISH" line further down.
 
 · 删掉一个版本 / 一份备份（不可逆）
 
-      "Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+      "Mindustry启动器.exe" --delete-version "Mindustry 146" --yes
       "Mindustry启动器.exe" --delete-backup 默认 --yes
       "Mindustry启动器.exe" --delete-backup 默认 2026-09-20_16-35-32 --yes
 
@@ -795,11 +796,12 @@ Pass an argument from a console (cmd, PowerShell, Windows Terminal) and it goes
 straight into that version. The launcher window never appears -- all you see is
 the game:
 
-    "Mindustry启动器.exe" --launch "Mindustry v146"
+    "Mindustry启动器.exe" --launch "Mindustry 146"
 
-The version name is the line shown in the main window's list (Mindustry v146,
-BE v146, ...). Just the version number (v146) works too -- as long as only one
+The version name is the line shown in the main window's list (Mindustry 146,
+BE v7, ...). Just the version number (146, v7) works too -- as long as only one
 type has it; if several do, it asks you to spell out the full name instead.
+A leading v is optional (v146 and 146 are the same).
 
 Can't remember the name? List them first:
 
@@ -858,7 +860,7 @@ Both run from a console and never launch the game or open the launcher window:
 
 - Pack a game version into a jar -- runs with java -jar on any machine:
 
-      "Mindustry启动器.exe" --export "Mindustry v146"
+      "Mindustry启动器.exe" --export "Mindustry 146"
 
 - Pack a save backup into a zip -- leaving the timestamp out takes the newest
   one in that profile:
@@ -877,7 +879,7 @@ The file goes into the current directory by default, named "type_version.jar" /
 "profile_timestamp.zip". To put it elsewhere add --out (a file path, or an
 existing directory):
 
-    "Mindustry启动器.exe" --export "Mindustry v146" --out D:\\share\\
+    "Mindustry启动器.exe" --export "Mindustry 146" --out D:\\share\\
 
 Nothing is ever overwritten: if the name is already taken it becomes ..._2.jar,
 ..._3.jar, and so on.
@@ -906,7 +908,7 @@ IMPORTING / DELETING / RESTORING FROM THE CONSOLE
 
 - Delete a version / one backup (cannot be undone)
 
-      "Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+      "Mindustry启动器.exe" --delete-version "Mindustry 146" --yes
       "Mindustry启动器.exe" --delete-backup 默认 --yes
       "Mindustry启动器.exe" --delete-backup 默认 2026-09-20_16-35-32 --yes
 

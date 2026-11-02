@@ -30,10 +30,10 @@
 
 ```bat
 :: 直接进游戏（屏幕上只有游戏，没有启动器）
-"Mindustry启动器.exe" --launch "Mindustry v146"
+"Mindustry启动器.exe" --launch "Mindustry 146"
 
 :: 把版本拼成 jar 带走 —— 不给 --out 就写到当前目录
-"Mindustry启动器.exe" --export "Mindustry v146" --out D:\分享\
+"Mindustry启动器.exe" --export "Mindustry 146" --out D:\分享\
 
 :: 改两项设置，下次启动生效
 "Mindustry启动器.exe" --set language=en_US auto_update=false
@@ -48,9 +48,10 @@
   于是 `--export-backup X --delete-backup X` 天然是「先留副本、再删」）。
 - **会改数据的目标不能同时给**：`--restore-backup` / `--delete-version` / `--delete-backup`
   里给了两个以上，按参数写坏处理（退出码 `2`），一个都不做 —— 只做第一个等于悄悄丢掉另一半。
-- **版本名**就是主界面列表里那一行（`Mindustry v146`、`BE v146`）；也可以只写版本号（`v146`），
-  前提是它只属于一个类型，撞名时会告诉你要写全名。名字写错、或者 `--launch` 后面没跟名字，
-  **什么都不会启动**，控制台里把可用版本列出来。
+- **版本名**就是主界面列表里那一行（`Mindustry 146`、`BE v7`）；也可以只写版本号（`146`、
+  `v7`），前提是它只属于一个类型，撞名时会告诉你要写全名。版本号前的 `v` **可带可不带**
+  （`v146` 与 `146` 等价：下载来的版本号按 GitHub tag 去掉了 `v`，两种写法都认）。名字写错、
+  或者 `--launch` 后面没跟名字，**什么都不会启动**，控制台里把可用版本列出来。
 - **零界面**：进度和结果都写在**你敲命令的那个控制台**里 —— 正在启动哪个版本、起来了（带本次耗时）、
   游戏退出（带玩了多久）、这一局有没有自动备份。
 - ⚠️ **cmd 对窗口程序不等待**：命令敲下去，提示符立刻就回来，还排在程序输出**前面**。所以以
@@ -103,7 +104,7 @@
 
 ```bat
 :: 删掉一个版本（随后回收没人引用的对象）
-"Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+"Mindustry启动器.exe" --delete-version "Mindustry 146" --yes
 
 :: 删掉某个分类最新那份备份
 "Mindustry启动器.exe" --delete-backup 默认 --yes

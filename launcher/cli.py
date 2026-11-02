@@ -17,8 +17,10 @@
 ---------------------------------------------------------------------
 ``--launch <版本>``
     让启动器**直接**启动指定版本，省掉「选中 → 点启动 → 点确认」。
-    版本名就是主界面列表里显示的那一行（如 ``Mindustry v146`` / ``BE v146``）；
-    也可以只写版本号本身（如 ``v146``），前提是它只属于一个类型。
+    版本名就是主界面列表里显示的那一行（如 ``Mindustry 146`` / ``BE v7``）；
+    也可以只写版本号本身（如 ``146``），前提是它只属于一个类型。
+    ★ 版本号前的 ``v`` 可带可不带（``v146`` 与 ``146`` 等价）—— 下载来的
+      版本号按 GitHub tag 去掉了 ``v``，而旧文档一直写的是带 ``v`` 的样子。
 
 ``--list``
     列出本机已有的版本（就是列表里那些行）。想知道 ``--launch`` 该写什么
@@ -106,6 +108,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -735,6 +738,21 @@ def parse_cli(argv: list[str]) -> CliRequest:
         bad_flag=broken if not launch else "",
     )
 
+
+#: 版本号前面那个可选的 ``v``（``v160.7`` / ``Mindustry v160.7``）。
+#: ★ 只认「v 紧跟数字、且前面是开头或空白」—— 类型名里自带的（``MDTv2``）
+#:   不能被当成前缀抹掉，否则等于悄悄改了用户起的名字。
+_V_PREFIX = re.compile(r"(^|\s)[vV](?=\d)")
+
+
+def _without_v_prefix(text: str) -> str:
+    """去掉版本号前的 ``v``，**只用于比对**，不改任何存下来的名字。
+
+    ``v160.7`` → ``160.7``、``mindustry v160.7`` → ``mindustry 160.7``。
+    """
+    return _V_PREFIX.sub(r"\1", text)
+
+
 def match_version(
     versions: list[dict[str, Any]], query: str
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -743,7 +761,17 @@ def match_version(
     规则按顺序，取第一个成立的：
 
     1. **显示名**精确相同（不分大小写、忽略两端空白）—— 就是列表里那一行；
-    2. 否则**原始版本号**精确相同（``v146`` 这种，即不带类型前缀的写法）。
+    2. 否则**原始版本号**精确相同（``160.7`` 这种，即不带类型前缀的写法）；
+    3. 否则把**两侧**版本号前的 ``v`` 都去掉再比一次
+       （``v160.7`` ≡ ``160.7``、``Mindustry v160.7`` ≡ ``Mindustry 160.7``）。
+
+    ★ 第 3 条是补历史口径：下载来的版本号取自 GitHub tag 并去掉了 ``v``
+      （列表里是 ``Mindustry 160.7``），而帮助 / 文档长期写的是带 ``v`` 的
+      ``Mindustry v160.7``。用户照着抄，明明列表里有、却被告知「找不到」。
+    ★ 前两条仍是**原样精确**：库里真的同时装了 ``146`` 和 ``v146`` 时，
+      用户写哪个就命中哪个，不会被第 3 条搅成「撞名」。
+    ★ 第 3 条也只做**精确等价**，不做前缀/模糊匹配：``Mindustry v14``
+      不会命中 ``Mindustry 146``（版本决定用哪套存档目录，猜错＝写错地方）。
 
     返回的两个值合起来有三种含义：
 
@@ -770,7 +798,23 @@ def match_version(
     ]
     if len(same_raw) == 1:
         return same_raw[0], []
-    return None, [str(v.get("name", "")) for v in same_raw]
+    if len(same_raw) > 1:
+        return None, [str(v.get("name", "")) for v in same_raw]
+
+    # 3. v 前缀可省：两边都按「去掉 v」的形态再比一次（仍然只认精确等价）。
+    relaxed = _without_v_prefix(q)
+    tolerant = [
+        v for v in versions
+        if relaxed in {
+            _without_v_prefix(str(v.get("name", "")).strip().casefold()),
+            _without_v_prefix(
+                str(v.get("raw_version", "")).strip().casefold()
+            ),
+        }
+    ]
+    if len(tolerant) == 1:
+        return tolerant[0], []
+    return None, [str(v.get("name", "")) for v in tolerant]
 
 
 def available_names(

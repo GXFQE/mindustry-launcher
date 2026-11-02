@@ -31,10 +31,10 @@ deleting a save profile is deliberately GUI-only, because it takes three confirm
 
 ```bat
 :: Straight into the game (only the game on screen, no launcher)
-"Mindustry启动器.exe" --launch "Mindustry v146"
+"Mindustry启动器.exe" --launch "Mindustry 146"
 
 :: Pack a version into a portable jar — without --out it goes to the current directory
-"Mindustry启动器.exe" --export "Mindustry v146" --out D:\share\
+"Mindustry启动器.exe" --export "Mindustry 146" --out D:\share\
 
 :: Change two settings, effective on the next start
 "Mindustry启动器.exe" --set language=en_US auto_update=false
@@ -51,10 +51,11 @@ deleting a save profile is deliberately GUI-only, because it takes three confirm
 - **Data-changing targets are mutually exclusive**: giving two of `--restore-backup` /
   `--delete-version` / `--delete-backup` is bad usage (exit code `2`) and nothing runs at all — doing
   only the first would silently drop the other half.
-- **A version name** is the row shown in the version list (`Mindustry v146`, `BE v146`); the bare
-  number (`v146`) works too as long as only one type has it — an ambiguous name tells you to write it
-  out. A mistyped name, or `--launch` with nothing after it, **starts nothing** and lists what is
-  available.
+- **A version name** is the row shown in the version list (`Mindustry 146`, `BE v7`); the bare
+  number (`146`, `v7`) works too as long as only one type has it — an ambiguous name tells you to
+  write it out. A leading `v` is **optional** (`v146` and `146` are the same: downloaded version
+  numbers come from GitHub tags with the `v` removed, and both forms are accepted). A mistyped name,
+  or `--launch` with nothing after it, **starts nothing** and lists what is available.
 - **No window**: progress and results go to the console you typed in — which version is starting, when
   it came up (with the time it took), when the game exits (with how long you played), and whether a
   backup was made.
@@ -119,7 +120,7 @@ launcher must be closed.
 
 ```bat
 :: Delete a version (and reclaim objects nothing references any more)
-"Mindustry启动器.exe" --delete-version "Mindustry v146" --yes
+"Mindustry启动器.exe" --delete-version "Mindustry 146" --yes
 
 :: Delete the newest backup of a profile
 "Mindustry启动器.exe" --delete-backup 默认 --yes

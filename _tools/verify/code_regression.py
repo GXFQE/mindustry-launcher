@@ -4108,6 +4108,53 @@ def test_cli_launch_args():
     hit, cand = m("Mindustry v14")
     check("★ 只做精确匹配：前缀不算命中（猜错版本＝写错存档目录）",
           hit is None and cand == [], str((hit, cand)))
+
+    # ★★ 真实清单里的版本号是**不带 v** 的（GitHub tag 下载时 lstrip 掉了），
+    #    而帮助 / 文档长期教的是带 v 的写法。两边必须能对上，否则用户照着
+    #    文档敲，明明 --list 里就有、却被答复「找不到」。
+    real = [
+        {"name": "Mindustry 160.7", "raw_version": "160.7"},
+        {"name": "MindustryX 2025.10.X20", "raw_version": "2025.10.X20"},
+        {"name": "BE v7", "raw_version": "v7"},
+    ]
+    hit, cand = CLI.match_version(real, "Mindustry v160.7")
+    check("★ 带 v 的全名命中不带 v 的版本（文档一直这么教，必须认）",
+          hit is real[0] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(real, "v160.7")
+    check("★ 只写带 v 的版本号也认（同一条规则，不是特例）",
+          hit is real[0] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(real, "MindustryX v2025.10.X20")
+    check("……MindustryX 那种带 X 的版本号同样适用",
+          hit is real[1] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(real, "BE 7")
+    check("★ 反过来也认：库里存的是带 v 的，用户写不带 v 的",
+          hit is real[2] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(real, "Mindustry v160")
+    check("★ v 前缀容错**不是**前缀匹配（v160 ≠ 160.7）",
+          hit is None and cand == [], str((hit, cand)))
+
+    dup = real + [
+        {"name": "MindustryClassic 160.7", "raw_version": "160.7"},
+    ]
+    hit, cand = CLI.match_version(dup, "Mindustry v160.7")
+    check("★ 写了类型就不该被「同号的别的类型」搅成撞名",
+          hit is real[0] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(dup, "v160.7")
+    check("★ 只写版本号、同号撞多个类型 ⇒ 仍然不猜（交候选）",
+          hit is None
+          and cand == ["Mindustry 160.7", "MindustryClassic 160.7"],
+          str((hit, cand)))
+
+    exact = [
+        {"name": "Mindustry 146", "raw_version": "146"},
+        {"name": "Mindustry v146", "raw_version": "v146"},
+    ]
+    hit, cand = CLI.match_version(exact, "Mindustry v146")
+    check("★ 原样精确优先：同号两版并存时，写哪个就命中哪个",
+          hit is exact[1] and cand == [], str((hit, cand)))
+    hit, cand = CLI.match_version(exact, "Mindustry 146")
+    check("……不带 v 的写法命中的是不带 v 的那个（不会被容错搅成撞名）",
+          hit is exact[0] and cand == [], str((hit, cand)))
     hit, cand = m("不存在")
     check("找不到 ⇒ (None, [])，由调用方去列可用版本",
           hit is None and cand == [], str((hit, cand)))
@@ -4752,7 +4799,7 @@ def test_cli_launch_args():
         elif isinstance(n, ast.ImportFrom):
             imported.add(n.module or "")
     check("参数模块只 import 标准库（不 import 包内模块 ⇒ 谁都能安全 import）",
-          imported <= {"__future__", "dataclasses", "typing"},
+          imported <= {"__future__", "dataclasses", "re", "typing"},
           str(sorted(imported)))
 
 

@@ -104,7 +104,7 @@ def resolve_output(raw: str, default_name: str) -> Path:
 def version_filename(hit: dict[str, Any]) -> str:
     """版本导出的默认文件名：``MindustryX_2025.10.X20.jar``。
 
-    用「类型_版本号」而不是界面上的显示名（``Mindustry v146``）：后者带空格，
+    用「类型_版本号」而不是界面上的显示名（``Mindustry 146``）：后者带空格，
     而前者正是清单文件名用的那套拼法，跨平台、跨压缩工具都省事。
     """
     vtype = safe_filename(str(hit.get("type", "")), "version")

@@ -48,7 +48,7 @@ The interface **follows your system language** (Chinese / English); settings can
 
 ### Versions
 
-- One row per version (`Mindustry v146` …); select and press **Launch**; **Manage versions** imports,
+- One row per version (`Mindustry 146` …); select and press **Launch**; **Manage versions** imports,
   renames and deletes
 - **Identical files are stored once**, so a second version does not cost a full extra copy
 - **Launch pre-warming**: the runtime jar is assembled in the background as soon as the window opens

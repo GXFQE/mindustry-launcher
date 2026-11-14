@@ -51,7 +51,7 @@ from typing import Any, Callable
 
 from .config import normalize_mirror
 from .ghauth import apply_auth
-from .i18n import t
+from .i18n import format_download_detail, t
 from .utils import (
     LAUNCHER_UPDATE_MODES,
     ssl_context,
@@ -361,7 +361,7 @@ def download_update(
     dest: Path,
     mirror: str = "",
     stop_event: threading.Event | None = None,
-    on_progress: Callable[[float], None] | None = None,
+    on_progress: Callable[[float, float, float], None] | None = None,
 ) -> bool:
     """下更新包。镜像前缀试不过就退回直连（跟游戏版本下载一个套路）。
 
@@ -868,8 +868,9 @@ def check_and_stage(
     status(t("selfupdate.downloading", version=version, size=size_txt))
     ok = download_update(
         info, zip_path, mirror=mirror, stop_event=stop_event,
-        on_progress=lambda pct: status(
-            t("selfupdate.download_progress", version=version, pct=pct),
+        on_progress=lambda pct, speed, remain: status(
+            t("selfupdate.download_progress", version=version, pct=pct,
+              detail=format_download_detail(speed, remain)),
             log_level=logging.DEBUG,
         ),
     )

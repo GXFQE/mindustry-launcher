@@ -409,6 +409,27 @@ def file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def format_size(num_bytes: float) -> str:
+    """字节数 → 人看的字符串（1024 进制）：``3.2 MB`` / ``980 KB`` / ``12 B``。
+
+    ★ 住在这里而不是 mirrortest：下载进度要显示速率，而 mirrortest 反过来
+      import utils（依赖方向不能倒）。mirrortest 那边保留同名导出，老的
+      ``mirrortest.format_size(...)`` 调用照旧能用。
+    """
+    value = float(num_bytes)
+    unit = "B"
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            break
+        value /= 1024
+    if unit == "B":
+        return f"{int(value)} B"
+    if unit == "KB":
+        # KB 只可能是 1~1023，整数够用 —— 「980.0 KB」白多一位小数
+        return f"{value:.0f} KB"
+    return f"{value:.1f} {unit}"
+
+
 def download_tmp_path(identity: str, suffix: str = ".downloading") -> Path:
     """断点文件的**确定性**路径：同一 ``identity`` 永远得到同一个文件。
 
@@ -447,7 +468,7 @@ def download_file(
     url: str,
     dest: Path,
     stop_event: threading.Event | None = None,
-    on_progress: Callable[[float], None] | None = None,
+    on_progress: Callable[[float, float, float], None] | None = None,
     expected_sha256: str | None = None,
     expected_size: int = 0,
     resume: bool = False,
@@ -471,8 +492,15 @@ def download_file(
     大小** —— 服务器把连接干净地关掉是不抛异常的，光看 sha 会漏掉
     「没有 sha 的清单」那条路。
 
-    ``on_progress`` 只是显示用的：它抛异常会被吞掉（记 WARNING），
-    不许因为界面的问题把 87 MB 的传输作废。
+    ``on_progress(百分比, 字节/秒, 剩余秒数)`` 只是显示用的，每秒最多一次：
+
+      * 百分比封顶 100（服务器多给也不显示 138%）；
+      * 速率是**实测**的（最近两次采样之间真正读到的字节 / 间隔），并用指数
+        滑动平均压过抖动 —— 瞬时值会让「剩余时间」在 18 秒和 45 秒之间来回跳；
+      * 剩余秒数按 ``总长 - 已下`` 除以平滑后的速率算，0 表示算不出来
+        （还不知道总长 / 刚开始还没来得及采样）。
+
+    ★ 它抛异常会被吞掉（记 WARNING）：不许因为界面的问题把 87 MB 的传输作废。
     """
     skip = 0
     if resume:
@@ -588,6 +616,8 @@ def download_file(
             )
         downloaded = skip
         last_update = time.time()
+        last_bytes = downloaded          # 上次采样时的字节数（算瞬时速率）
+        speed = 0.0                      # 平滑后的速率（字节/秒）
         sha256 = hashlib.sha256()
         try:
             with open(dest, "ab" if resumed else "wb") as f:
@@ -605,12 +635,26 @@ def download_file(
                         # 那时改用 file_sha256() 整文件重算。
                         sha256.update(chunk)
                     now = time.time()
-                    if on_progress and total > 0 and now - last_update >= 1.0:
-                        # 先记时间再回调：回调要是每次都炸，也不会变成
-                        # 「每读一块炸一次」的日志风暴。
+                    span = now - last_update
+                    if on_progress and total > 0 and span >= 1.0:
+                        # ★ 先记时间/字节，再回调：回调要是每次都炸，也不会
+                        #   变成「每读一块炸一次」的日志风暴；速率也不会被
+                        #   回调自身的耗时摊薄（那是界面慢，不是网速慢）。
+                        inst = (downloaded - last_bytes) / span
+                        # 指数滑动平均（α=0.4）：瞬时速率每跳一下，剩余时间
+                        # 就跟着在 18 秒 / 45 秒之间来回蹦，比不准更烦人。
+                        speed = inst if speed <= 0 else speed * 0.6 + inst * 0.4
                         last_update = now
+                        last_bytes = downloaded
+                        # 剩余秒数：算不出来就给 0（界面据此不显示这一段）
+                        remain = ((total - downloaded) / speed
+                                  if speed > 0 else 0.0)
                         try:
-                            on_progress(min(100.0, downloaded / total * 100))
+                            on_progress(
+                                min(100.0, downloaded / total * 100),
+                                speed,
+                                max(0.0, remain),
+                            )
                         except Exception as e:                  # noqa: BLE001
                             # 进度只是**显示**：回调（界面）出错不许把下载
                             # 带崩 —— 否则关窗口时一个 TclError 就能让

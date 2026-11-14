@@ -1448,11 +1448,17 @@ def test_mirror_and_log_keep():
 #   /short   声明全长、只发一半就**正常关连接** —— 12e（不抛异常也会下不全）
 #   /wrlen   长度就不对（模拟镜像把错误页当 200 发）—— 12e
 #   /nolen_big 不发 Content-Length 且多发一半 —— 12e（进度与回调容错）
+#   /trickle 完整但慢（每 64 KB 停 120 ms，全程 2 秒多）—— 12f（速率采样窗口）
 #   其它     404
 _BLOB = b"x" * 600_000
 _TINY = b"z" * 100_000
 # 断点续传测试（12d）的数据源：内容确定（每个字节可验）、够大（能分块）
 _DL_DATA = bytes(i % 251 for i in range(200_000))
+# 12f：本地回环下整份 87 MB 也就几十毫秒，进度回调的 1 秒节流一次都碰不到 ——
+# 要让「速率 / 剩余时间」有采样点，得有一路**慢而完整**的下载。
+_TRICKLE_BLOCK = 64 * 1024
+_TRICKLE_BLOCKS = 20
+_TRICKLE_LEN = _TRICKLE_BLOCK * _TRICKLE_BLOCKS
 # 一段**有效 zip**（ZIP_STORED，尺寸确定）：调用方链路的末尾有 is_zipfile
 # 校验，靶场数据必须真的能过。
 _zbuf = io.BytesIO()
@@ -1486,6 +1492,20 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"GARBAGE NOT HTTP\r\n\r\n")
             self.wfile.flush()
             self.close_connection = True
+            return
+        if self.path == "/trickle":
+            # 12f：完整但慢的一路 —— 每 64 KB 停 120 ms，全程约 2.4 秒，
+            # 正好给 1 秒节流的进度回调留出 2 个采样点（见 _TRICKLE_* 常量）。
+            self.send_response(200)
+            self.send_header("Content-Length", str(_TRICKLE_LEN))
+            self.end_headers()
+            try:
+                for _ in range(_TRICKLE_BLOCKS):
+                    self.wfile.write(b"t" * _TRICKLE_BLOCK)
+                    self.wfile.flush()
+                    time.sleep(0.12)
+            except OSError:
+                pass            # 客户端中途走了（取消/超时），不是被测行为
             return
         if self.path == "/blob":
             payload = _BLOB
@@ -2332,7 +2352,7 @@ def test_download_size_guards():
         # ---- 没有 Content-Length：进度靠 expected_size 顶，回调炸了也不带崩 ----
         seen: list[float] = []
 
-        def boom(pct: float) -> None:
+        def boom(pct: float, _speed: float, _remain: float) -> None:
             seen.append(pct)
             raise RuntimeError("界面回调炸了")
 
@@ -2346,6 +2366,48 @@ def test_download_size_guards():
         check("★ 进度回调每秒炸一次 ⇒ 下载照样跑到底（只吞回调，不吞下载）",
               ok is False and not big.exists(),
               f"ok={ok} size={big.stat().st_size if big.exists() else 'gone'}")
+
+        # ---- 12f：回调里的「速率 / 剩余时间」----
+        # 本地回环下整份 87 MB 也就几十毫秒，1 秒节流的回调一次都触发不了 ——
+        # 拿 /trickle 把下载拖到 2 秒多，才有采样点（见 _TRICKLE_* 常量）。
+        marks: list[tuple[float, float, float]] = []
+        trickle = sb / "trickle.bin"
+        ok = download_file(
+            base + "trickle", trickle, expected_size=_TRICKLE_LEN,
+            on_progress=lambda p, s, r: marks.append((p, s, r)),
+        )
+        check("慢速下载：回调同时带上速率和剩余秒数",
+              ok and len(marks) >= 2, f"ok={ok} 回调 {len(marks)} 次")
+        check("……速率是实测的正数（不是占位的 0）",
+              bool(marks) and all(s > 0 for _p, s, _r in marks),
+              str([round(s) for _p, s, _r in marks]))
+        check("……百分比只增不减、不越 100",
+              bool(marks)
+              and [p for p, _s, _r in marks] == sorted(p for p, _s, _r in marks)
+              and max(p for p, _s, _r in marks) <= 100.0,
+              str([round(p, 1) for p, _s, _r in marks]))
+        check("……剩余秒数一路变短（「还剩多久」得真的在倒数）",
+              len(marks) >= 2 and marks[-1][2] < marks[0][2],
+              str([round(r, 1) for _p, _s, r in marks]))
+
+        from launcher.i18n import format_download_detail, t as _t
+        from launcher.utils import format_size as _fs
+        check("速率文案：算不出速率时整段为空（不留孤零零的分隔符）",
+              format_download_detail(0, 0) == "")
+        check("速率文案：有速率有剩余时两样都出现（剩余写成 M:SS）",
+              "1.0 MB" in format_download_detail(1048576, 30)
+              and "0:30" in format_download_detail(1048576, 30),
+              format_download_detail(1048576, 30))
+        check("速率文案：几百秒也换算成 M:SS（「剩 402秒」得让人心算）",
+              "6:42" in format_download_detail(210 * 1024, 402),
+              format_download_detail(210 * 1024, 402))
+        check("速率文案：剩余不足 1 秒只显速率（不出现「剩 0:00」）",
+              format_download_detail(1048576, 0.4)
+              == _t("download.detail_rate_only", rate="1.0 MB"),
+              format_download_detail(1048576, 0.4))
+        check("体积格式：KB 不带小数、MB 保留一位（980.0 KB 白多一位）",
+              _fs(980 * 1024) == "980 KB" and _fs(3.2 * 1048576) == "3.2 MB",
+              f"{_fs(980 * 1024)} / {_fs(3.2 * 1048576)}")
     finally:
         srv.shutdown()
         srv.server_close()

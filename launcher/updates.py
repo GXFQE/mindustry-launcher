@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import ConfigManager, normalize_mirror
 from .ghauth import apply_auth
-from .i18n import t
+from .i18n import format_download_detail, t
 from .storage import VersionManager
 from .utils import (
     ssl_context,
@@ -311,12 +311,13 @@ class UpdateManager:
                 if self.stop_event.is_set():
                     return False
 
-                def progress(pct: float) -> None:
+                def progress(pct: float, speed: float, remain: float) -> None:
                     if status_cb:
                         status_cb(
                             t("updater.download_progress",
                               type=info["type"], version=info["version"],
-                              pct=pct),
+                              pct=pct,
+                              detail=format_download_detail(speed, remain)),
                             log_level=logging.DEBUG,
                         )
 

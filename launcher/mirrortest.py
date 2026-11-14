@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from .utils import ssl_context
+from .utils import format_size, ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -502,19 +502,6 @@ def sorted_results(results: Iterable[MirrorResult]) -> list[MirrorResult]:
             r.prefix,
         ),
     )
-
-
-def format_size(num_bytes: float) -> str:
-    """字节数 → 人看的字符串（1024 进制）。速度/样本量都用它。"""
-    value = float(num_bytes)
-    unit = "B"
-    for unit in ("B", "KB", "MB", "GB"):
-        if value < 1024 or unit == "GB":
-            break
-        value /= 1024
-    if unit == "B":
-        return f"{int(value)} B"
-    return f"{value:.1f} {unit}"
 
 
 def format_speed(bps: float | None) -> str:

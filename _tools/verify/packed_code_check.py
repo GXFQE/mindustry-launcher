@@ -177,6 +177,9 @@ REQUIRED = {
         # 真带上这个能力。
         "download_file", "download_tmp_path", "file_sha256",
         "_parse_content_range", "_try_unlink", "_DOWNLOAD_CHUNK",
+        # 2026-11-14：体积/速率格式化从 mirrortest 下放到这里（mirrortest
+        # 反过来 import utils，不能倒过来）。i18n 的进度后缀靠它拼数字。
+        "format_size",
     ],
     "launcher.config": [
         # 版本号会拼进清单文件名，必须和分类名一样过校验

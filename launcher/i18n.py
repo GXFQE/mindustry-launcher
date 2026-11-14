@@ -167,14 +167,16 @@ def format_download_detail(speed_bps: float, remaining_s: float) -> str:
     这三样拼成一行状态。速率和剩余**分开判断**：第一秒还没采样出速率时
     整段不显示；算不出剩余（总长未知）时只显示速率。
 
-    ★ 单位写在文案里，不拼在数字后面 —— 中文是「3.2 MB/秒」、英文是
-      「3.2 MB/s」，数字部分共用 ``format_size`` 的 1024 进制输出。
+    ★ 单位写在文案里（``unit.rate``），不拼在数字后面 —— 中文是「3.2 MB/秒」、
+      英文是「3.2 MB/s」；数字部分共用 ``format_size`` 的 1024 进制输出。
+      测速窗口的 ``mirrortest.format_speed`` 走的是同一个 key，同一屏里
+      不会一半「/秒」一半「/s」。
     ★ 住在这里而不是 utils：它产出的是**界面文案**，而 utils 是最底层
       （i18n 反过来 import 它，不能倒过来依赖）。
     """
     if speed_bps <= 0:
         return ""
-    rate = format_size(speed_bps)
+    rate = t("unit.rate", rate=format_size(speed_bps))
     if remaining_s >= 1:
         # 剩余时间用 M:SS（跟计时器一个写法）：慢线上下载动辄几百秒，
         # 「剩 402 秒」得让人心算一遍，「剩 6:42」不用。

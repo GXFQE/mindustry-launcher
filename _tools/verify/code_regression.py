@@ -1649,9 +1649,12 @@ def test_mirror_speed_test():
     check("没有数据的速度显示成「—」",
           MT.format_speed(None) == "—" and MT.format_speed(0) == "—",
           f"{MT.format_speed(None)!r}")
-    check("速度按量级换单位",
-          MT.format_speed(500_000) == "488 KB/s"
-          and MT.format_speed(3_200_000) == "3.1 MB/s",
+    # ★ 单位统一走 unit.rate：下载进度写「3.2 MB/秒」，测速结果要是写
+    #   「3.2 MB/s」，同一个窗口里就有两套写法。
+    from launcher.i18n import t as _t
+    check("速度按量级换单位，且单位跟下载进度同一套（不硬编码 /s）",
+          MT.format_speed(500_000) == _t("unit.rate", rate="488 KB")
+          and MT.format_speed(3_200_000) == _t("unit.rate", rate="3.1 MB"),
           f"{MT.format_speed(500_000)} / {MT.format_speed(3_200_000)}")
     check("延迟超 1 秒换成秒",
           MT.format_latency(1850) == "1.9 s"
@@ -2403,7 +2406,8 @@ def test_download_size_guards():
               format_download_detail(210 * 1024, 402))
         check("速率文案：剩余不足 1 秒只显速率（不出现「剩 0:00」）",
               format_download_detail(1048576, 0.4)
-              == _t("download.detail_rate_only", rate="1.0 MB"),
+              == _t("download.detail_rate_only",
+                    rate=_t("unit.rate", rate="1.0 MB")),
               format_download_detail(1048576, 0.4))
         check("体积格式：KB 不带小数、MB 保留一位（980.0 KB 白多一位）",
               _fs(980 * 1024) == "980 KB" and _fs(3.2 * 1048576) == "3.2 MB",

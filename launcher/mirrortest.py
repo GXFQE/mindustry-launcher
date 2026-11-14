@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+from .i18n import t
 from .utils import format_size, ssl_context
 
 logger = logging.getLogger(__name__)
@@ -505,12 +506,14 @@ def sorted_results(results: Iterable[MirrorResult]) -> list[MirrorResult]:
 
 
 def format_speed(bps: float | None) -> str:
-    """速度 → 人看的字符串；没有数据给 ``—``（界面里显示成「没测到」）。"""
+    """速度 → 人看的字符串；没有数据给 ``—``（界面里显示成「没测到」）。
+
+    ★ 单位走 ``unit.rate`` 而不是硬编码 ``/s``：下载进度显示「3.2 MB/秒」，
+      测速结果要是写「3.2 MB/s」，同一个窗口里就有两套写法。
+    """
     if not bps or bps <= 0:
         return "—"
-    if bps >= 1024 * 1024:
-        return f"{bps / 1024 / 1024:.1f} MB/s"
-    return f"{bps / 1024:.0f} KB/s"
+    return t("unit.rate", rate=format_size(bps))
 
 
 def format_latency(ms: float | None) -> str:

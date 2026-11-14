@@ -1558,10 +1558,12 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
+            # ★ 记录**先于**写响应：客户端读完数据就返回了，写在后面的话
+            #   这条记录可能晚于断言落地（实测偶发 1/10），断言就假红
+            _ProbeHandler.served.append((path, "", 200, cut))
             self.wfile.write(payload[:cut])
             self.wfile.flush()
             self.close_connection = True        # 提前关连接 → 客户端 IncompleteRead
-            _ProbeHandler.served.append((path, "", 200, cut))
             return
         rng = self.headers.get("Range", "")
         if rng and path != "/norange":
@@ -1581,14 +1583,14 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
                 f"bytes {start}-{len(payload) - 1}/{len(payload)}")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            _ProbeHandler.served.append((path, rng, 206, len(body)))  # 先记后写
             self.wfile.write(body)
-            _ProbeHandler.served.append((path, rng, 206, len(body)))
             return
         self.send_response(200)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
+        _ProbeHandler.served.append((path, rng, 200, len(payload)))  # 先记后写
         self.wfile.write(payload)
-        _ProbeHandler.served.append((path, rng, 200, len(payload)))
 
 
 def _start_probe_server():

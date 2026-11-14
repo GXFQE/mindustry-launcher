@@ -46,6 +46,11 @@
     匹配：显示名 → 原始版本号；撞名返回候选**不猜**，前缀不算命中）；以及
     接线 —— 入口 → CoreMixin → 启动路径的 confirm=False，都用 AST 钉住。
     这条链断掉是**静默失效**（启动器照常打开，只是没启动你要的版本）
+24) **下载的大小闸门**（12e）：服务器只发一半但**干净地**关连接 ⇒ 不许算
+    成功、半截留着续传；源给的长度与预期不符 ⇒ 先拦下来，**一个字节都不碰**
+    已经攒了几十 MB 的断点；服务器不给 Content-Length 时进度靠 expected_size
+    顶、百分比封顶 100、进度回调抛异常只吞回调不带崩下载；代理回非 HTTP 文本
+    ⇒ 返回 False（不许把 BadStatusLine 抛进下载线程）
 
 项数见末尾统计（改完 launcher/ 就该跑一遍）。
 """
@@ -605,6 +610,7 @@ def main():
     test_mirror_speed_test()
     test_gh_auth()
     test_download_resume()
+    test_download_size_guards()
     test_lock_scope()
     test_wheel_routing()
     test_settings_flow_and_autoclose()
@@ -1439,6 +1445,9 @@ def test_mirror_and_log_keep():
 #   /norange 无视 Range 头，永远 200 全量 —— 12d（有的镜像真这样）
 #   /cut     第一条连接发一半就断 —— 12d（模拟下载中断）
 #   /jar     一段有效 zip 数据，支持 Range —— 12d 的调用方端到端
+#   /short   声明全长、只发一半就**正常关连接** —— 12e（不抛异常也会下不全）
+#   /wrlen   长度就不对（模拟镜像把错误页当 200 发）—— 12e
+#   /nolen_big 不发 Content-Length 且多发一半 —— 12e（进度与回调容错）
 #   其它     404
 _BLOB = b"x" * 600_000
 _TINY = b"z" * 100_000
@@ -1468,6 +1477,16 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
         if self.path in ("/ranged", "/norange", "/cut", "/jar"):
             self._serve_rangeable()
             return
+        if self.path in ("/short", "/wrlen", "/nolen_big"):
+            self._serve_size_traps()
+            return
+        if self.path == "/garbage":
+            # 回一行**不是 HTTP** 的东西（被劫持的代理 / 运营商插页最典型）：
+            # 客户端抛 BadStatusLine —— 那是 HTTPException，不是 OSError
+            self.wfile.write(b"GARBAGE NOT HTTP\r\n\r\n")
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if self.path == "/blob":
             payload = _BLOB
         elif self.path == "/tiny":
@@ -1491,6 +1510,43 @@ class _ProbeHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _serve_size_traps(self):
+        """12e 的靶场：都在「大小」上做手脚。
+
+        这三种服务器在真实世界里都见过：CDN 掐断连接、镜像把错误页当 200
+        发、几十年前的老服务器不发 Content-Length（靠关连接表示结束）。
+        """
+        if self.path == "/short":
+            # 声明全长、只发一半，然后**正常**关连接 —— 客户端不会拿到异常，
+            # 光看「读完了」会以为下成功
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(_DL_DATA)))
+            self.end_headers()
+            self.wfile.write(_DL_DATA[: len(_DL_DATA) // 2])
+            self.wfile.flush()
+            return
+        if self.path == "/wrlen":
+            body = b"<html>mirror error</html>" * 160      # 3040 B 的「错误页」
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            return
+        # /nolen_big：不发 Content-Length，而且比预期**多**发一倍 —— 顺带
+        # 钉住「百分比夹在 100」；慢慢吐是为了真的触发进度回调
+        body = _DL_DATA * 2
+        step = len(body) // 12
+        self.send_response(200)
+        self.end_headers()
+        for i in range(0, len(body), step):
+            try:
+                self.wfile.write(body[i:i + step])
+                self.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.12)
 
     def _serve_rangeable(self):
         """12d 的靶场：支持 Range；/cut 可模拟「发一半就断」。"""
@@ -2222,6 +2278,75 @@ def test_download_resume():
         srv.server_close()
         for p in kept:
             p.unlink(missing_ok=True)
+        shutil.rmtree(sb, ignore_errors=True)
+
+
+# --------------------- 12e. 下载的「大小」闸门（本地 HTTP，离线）
+def test_download_size_guards():
+    """钉住三条「用户真会遇到、以前却静默放过」的事。
+
+      * 服务器只发一半就**干净地**关连接 —— 不抛异常，别当成下成功；
+      * 这个源给的根本是别的文件（长度差得离谱）—— 先拦下来，**别动**
+        磁盘上那个已经攒了几十 MB 的断点（动了就等于替用户重下）；
+      * 服务器不发 Content-Length —— 进度也得动起来；而且回调（界面）
+        炸了不许把下载带崩，进度只是显示。
+    """
+    print("\n[12e] 下载的大小闸门（本地 HTTP，离线）")
+    from launcher.utils import download_file
+
+    data = _DL_DATA
+    sb = Path(tempfile.mkdtemp(prefix="mdt-dl2-"))
+    srv, base = _start_probe_server()
+    _ProbeHandler.served.clear()
+    try:
+        # ---- 截断：声明全长、只发一半、连接正常关闭（客户端拿不到异常）----
+        part = sb / "short.bin"
+        ok = download_file(base + "short", part, expected_size=len(data))
+        check("★ 服务器只发一半（无异常）⇒ 不许算成功", ok is False)
+        check("……而且**保留**已下的一半（还能续）",
+              part.exists() and part.stat().st_size == len(data) // 2,
+              part.stat().st_size if part.exists() else "gone")
+
+        # ---- 长度对不上的源：先拦，别毁断点 ----
+        keep = sb / "keep.bin"
+        keep.write_bytes(data[:100_000])
+        ok = download_file(base + "wrlen", keep, resume=True,
+                           expected_size=len(data))
+        check("★ 源给的文件长度对不上 ⇒ 失败", ok is False)
+        check("★★ ……而且一个字节都没碰磁盘上那份断点（否则白下几十 MB）",
+              keep.read_bytes() == data[:100_000],
+              f"size={keep.stat().st_size}")
+
+        # ---- 服务器回的不是 HTTP：协议层异常不许冒到调用方 ----
+        garb = sb / "garbage.bin"
+        raised = ""
+        try:
+            ok = download_file(base + "garbage", garb, expected_size=len(data))
+        except Exception as e:                                  # noqa: BLE001
+            ok, raised = None, f"{type(e).__name__}: {e}"
+        check("★ 服务器回的不是 HTTP（代理劫持页）⇒ 返回 False，不许抛",
+              ok is False, raised or f"ok={ok}")
+
+        # ---- 没有 Content-Length：进度靠 expected_size 顶，回调炸了也不带崩 ----
+        seen: list[float] = []
+
+        def boom(pct: float) -> None:
+            seen.append(pct)
+            raise RuntimeError("界面回调炸了")
+
+        big = sb / "nolen.bin"
+        ok = download_file(base + "nolen_big", big, on_progress=boom,
+                           expected_size=len(data))
+        check("★ 服务器不给 Content-Length 时进度照样会动（不靠它给总长）",
+              len(seen) > 0, f"{len(seen)} 次")
+        check("★ 百分比封顶 100（多发一倍也不许显示 138%）",
+              bool(seen) and max(seen) == 100.0, str(seen[:4]))
+        check("★ 进度回调每秒炸一次 ⇒ 下载照样跑到底（只吞回调，不吞下载）",
+              ok is False and not big.exists(),
+              f"ok={ok} size={big.stat().st_size if big.exists() else 'gone'}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
         shutil.rmtree(sb, ignore_errors=True)
 
 

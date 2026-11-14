@@ -463,9 +463,16 @@ def download_file(
         不对就删了重下。
 
     ★ 失败时默认**保留**已下载的部分（下一个源 / 用户下次重试能接着
-    下）—— 只有「已经下满但内容校验不过」这种没救的情况才清掉。
+    下）—— 只有「已经下满但内容校验不过」「比目标还大」这种没救的情况
+    才清掉。
     ``expected_size`` 是「任务期望的总大小」（0 = 不检查），用于核对
-    服务器给的确实是我们以为的那个文件。
+    服务器给的确实是我们以为的那个文件：**请求阶段**先比一次（200 收到
+    Content-Length / 206 收到 Content-Range），**下完再比一次实际文件
+    大小** —— 服务器把连接干净地关掉是不抛异常的，光看 sha 会漏掉
+    「没有 sha 的清单」那条路。
+
+    ``on_progress`` 只是显示用的：它抛异常会被吞掉（记 WARNING），
+    不许因为界面的问题把 87 MB 的传输作废。
     """
     skip = 0
     if resume:
@@ -510,7 +517,12 @@ def download_file(
             logger.error(f"下载失败 HTTP {e.code}: {url}")
             return False
         except (urllib.error.URLError, OSError,
-                http.client.IncompleteRead, http.client.RemoteDisconnected) as e:
+                http.client.HTTPException) as e:
+            # ★ 抓的是 HTTPException 这个**基类**：IncompleteRead、
+            #   RemoteDisconnected（这两个以前单独列过）之外还有
+            #   BadStatusLine / LineTooLong —— 代理或镜像回了非 HTTP 的
+            #   东西时抛的就是它们。漏在外面就违反了本函数「返回是否成功」
+            #   的约定，一路把异常冒进下载线程。
             logger.error(f"下载异常 {url}: {e}")
             return False
 
@@ -552,9 +564,23 @@ def download_file(
 
     with resp:
         content_length = int(resp.headers.get("Content-Length", 0) or 0)
+        # 200 那条路：服务器不认 Range、准备整份重下。**先核对总长再动磁盘**
+        # —— 长度对不上说明这个源给的是别的文件（镜像把错误页当 200 发是
+        # 常有的事）。这时候要是照常 "wb" 打开，上一轮镜像攒下的断点就被
+        # 清零了，几十 MB 得从头再下。
+        if (not resumed and expected_size and content_length
+                and content_length != expected_size):
+            logger.warning(
+                f"这个源给的文件大小（{content_length}）与预期"
+                f"（{expected_size}）不符，换下一个（保留断点）: {url}"
+            )
+            return False
         # 206 时 Content-Length 只是「剩余部分」的长度，总大小以
         # Content-Range 的 Z 为准；200 时 skip 已归零，直接相加。
-        total = total_remote or (skip + content_length)
+        # ★ 两样都拿不到（服务器不发 Content-Length、靠关连接结尾）就拿
+        #   expected_size 顶 —— 否则 total 恒为 0，进度回调一次都不发，
+        #   87 MB 的下载在界面上永远是 0%，看着像卡死。
+        total = total_remote or (skip + content_length) or expected_size
         if resumed:
             logger.info(
                 f"从断点续传: 已有 {skip} / {total} 字节"
@@ -580,12 +606,47 @@ def download_file(
                         sha256.update(chunk)
                     now = time.time()
                     if on_progress and total > 0 and now - last_update >= 1.0:
-                        on_progress(downloaded / total * 100)
+                        # 先记时间再回调：回调要是每次都炸，也不会变成
+                        # 「每读一块炸一次」的日志风暴。
                         last_update = now
+                        try:
+                            on_progress(min(100.0, downloaded / total * 100))
+                        except Exception as e:                  # noqa: BLE001
+                            # 进度只是**显示**：回调（界面）出错不许把下载
+                            # 带崩 —— 否则关窗口时一个 TclError 就能让
+                            # 已经下了 80 MB 的传输白费。
+                            logger.warning(f"下载进度回调出错（已忽略）: {e}")
         except (urllib.error.URLError, OSError,
-                http.client.IncompleteRead, http.client.RemoteDisconnected) as e:
-            # 中途断线：故意**不删**文件 —— 已下部分是下一次的断点
+                http.client.HTTPException) as e:
+            # HTTPException 基类兜住半路冒出来的协议层怪东西。中途断线时
+            # 故意**不删**文件 —— 已下部分是下一次的断点
             logger.error(f"下载中断 {url}: {e}")
+            return False
+
+    # ---- 大小核对（最后一道）----
+    # ★ 「连接干净地关掉」不会抛异常：服务器只发了一半也会走到这里。没有
+    #   sha 的清单（老资产 / 自建源）以前会把半截文件当**成功**返回，
+    #   靠调用方各自再查一遍；这里统一兜住，让「下载成功」真的成立。
+    if expected_size:
+        try:
+            actual_size = dest.stat().st_size
+        except OSError as e:
+            logger.error(f"下载后读不到文件大小（{e}）: {dest}")
+            return False
+        if actual_size != expected_size:
+            if actual_size > expected_size:
+                # 比目标还大：这份数据修不好（续传的起点会被 416 顶回来）
+                logger.error(
+                    f"下载的大小不对（预期 {expected_size}，实际 {actual_size}，"
+                    f"已删除）: {dest}"
+                )
+                _try_unlink(dest)
+            else:
+                # 没下满：留着，下一个源 / 下次重试还能接着下
+                logger.error(
+                    f"下载不完整（预期 {expected_size}，实际 {actual_size}，"
+                    f"保留断点可续传）: {dest}"
+                )
             return False
 
     if expected_sha256:

@@ -76,6 +76,8 @@ The interface **follows your system language** (Chinese / English); settings can
 - An empty mirror means a direct connection; **Speed test** measures every candidate and fills in the
   fastest; a broken download resumes where it stopped
 - Finished files are checked for size / checksum before entering the version store
+- HTTPS certificates are **not** verified by default (proxy setups often break otherwise); untick
+  "Disable HTTPS certificate checks" in Settings on a clean network, and point `SSL_CERT_FILE` at your own CA
 
 ### Command line
 

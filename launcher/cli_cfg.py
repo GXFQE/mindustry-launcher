@@ -98,6 +98,9 @@ GLOBAL_SPECS: tuple[Spec, ...] = (
         1, MAX_MIRROR_ROUNDS,
     ),
     Spec("global", "use_gh_auth", "settings.use_gh_auth", "bool"),
+    Spec(
+        "global", "disable_ssl_verify", "settings.disable_ssl_verify", "bool"
+    ),
     Spec("global", "extra_vm_args", "settings.label.extra_vm", "text"),
     Spec("global", "extra_program_args", "settings.label.extra_prog", "text"),
     Spec("global", "save_game_log", "settings.save_game_log", "bool"),

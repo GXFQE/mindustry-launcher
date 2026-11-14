@@ -629,6 +629,29 @@ class MainMixin:
         else:
             # 关着就不探测、不起子进程；这话也和「关了就不碰凭据」对上。
             self.gh_auth_status_var.set(t("gh_auth.off"))
+        # ---- HTTPS 证书校验（默认「禁用」，= 保持历史行为）----
+        # 默认不校验的那批人不是「不在乎安全」，而是**真的连不上**：国内直连常撞
+        # 证书吊销检查失败，用 S302 这类工具的人根证书又只进了系统库、
+        # Python 读不到。所以开关写成「禁用校验」并默认勾上 —— 勾着＝不校验，
+        # 要严格校验就把它取消掉。
+        # ★ 名字必须跟默认值同向：默认不校验却摆一个没勾的「校验证书」，
+        #   看着像本该打开却没打开，还容易顺手勾上去把代理搞挂。
+        self.disable_ssl_verify_var = tk.BooleanVar(
+            value=self.config.get("disable_ssl_verify")
+        )
+        ttk.Checkbutton(
+            glob,
+            text=t("settings.disable_ssl_verify"),
+            variable=self.disable_ssl_verify_var,
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=3)
+        row += 1
+        _auto_wrap_hint(ttk.Label(
+            glob,
+            text=t("settings.hint.disable_ssl_verify"),
+            font=("Microsoft YaHei", 8),
+            foreground="#777777",
+        )).grid(row=row, column=1, columnspan=2, sticky=tk.EW, padx=5)
+        row += 1
         # ---- 自定义启动参数 ----
         # ★ columnspan=3：这一帧有 3 列（标签 / 输入框 / 按钮），只盖 2 列的话
         #   分割线会在「按钮那一列的左边」断掉 —— 右边凭空少一截（量过：差 178 px）。
@@ -1052,6 +1075,9 @@ class MainMixin:
         )
         self.config.set("github_mirror", mirror)
         self.config.set("use_gh_auth", self.use_gh_auth_var.get())
+        self.config.set(
+            "disable_ssl_verify", self.disable_ssl_verify_var.get()
+        )
         self.config.set("auto_update", self.auto_update_var.get())
         # 下拉框里是给人看的文案，存回配置要换回英文档位值；万一认不出
         # （理论上不会）就保持原值 —— 绝不写进去一个界面文案当档位。
@@ -1127,6 +1153,9 @@ class MainMixin:
             )
             self.use_gh_auth_var.set(
                 ConfigManager.GLOBAL_DEFAULTS["use_gh_auth"]
+            )
+            self.disable_ssl_verify_var.set(
+                ConfigManager.GLOBAL_DEFAULTS["disable_ssl_verify"]
             )
             # 开关回到默认值，状态行也得跟着刷新（否则可能还停在「已关闭」）
             self._on_gh_auth_toggled()

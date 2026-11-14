@@ -24,6 +24,7 @@ from .utils import (
     normalize_language,
     normalize_launcher_update,
     parse_bool,
+    set_ssl_verify,
 )
 from .i18n import t
 from .version import CONFIG_VERSION
@@ -427,6 +428,18 @@ class ConfigManager:
         #   令牌只存在内存里（launcher/ghauth.py），不落盘、不进日志；
         #   第三方域名的请求（镜像、自定义源、自建代理）永远不带令牌。
         "use_gh_auth": False,
+        # ★ 是否**禁用** HTTPS 证书校验（默认**开** = 不校验，保持历史行为）。
+        #   名字必须跟默认值一致：默认不校验，开关就叫「禁用校验」——
+        #   反过来写（「校验证书」默认不勾）会让设置页里出现一个**没勾**
+        #   的安全项，看着像本该打开却没打开，还容易顺手勾上去把代理搞挂。
+        #   默认不校验不是「觉得不重要」，而是关掉的那部分用户确实连不上：
+        #   GitHub 直连在国内常撞证书吊销检查失败（CRYPT_E_NO_REVOCATION_CHECK），
+        #   用 S302 这类工具的人根证书又只注入到了系统库、Python 读不到。
+        #   取消勾选后走 ssl.create_default_context()；要让它认自建 CA，
+        #   设环境变量 SSL_CERT_FILE 指到证书文件即可。
+        #   ★ 只影响启动器自己发起的请求（下载 / 查更新 / 测速），
+        #   不动 ssl 的进程级默认上下文。
+        "disable_ssl_verify": True,
         "auto_update": True,
         # ★ 启动器**自身**的更新档位 —— 注意跟上面的 "auto_update" 不是
         #   一回事：那个管「**游戏**版本有没有新版」，这个管「**启动器**自己
@@ -593,6 +606,24 @@ class ConfigManager:
             ))
         )
 
+    def _apply_ssl_verify(self) -> None:
+        """把 ``disable_ssl_verify`` 开关同步给 utils 的 SSL 上下文选择器。
+
+        ★ 跟 ``_apply_gh_auth`` 一个道理：必须与配置**永远**同步 ——
+          ``load()`` 一次、``set()`` 改这一项再一次。不同步的症状是
+          「取消勾选了却还在不校验 / 勾上了却没生效」，而且只在下一次
+          发请求时才暴露。
+
+        ★ utils 那边的接口是**正向**的（``set_ssl_verify(True)`` = 校验），
+          取反只发生在这一处 —— 别把「禁用」这个说法漏进 utils 里去。
+        """
+        set_ssl_verify(
+            not bool(self.data.get(
+                "disable_ssl_verify",
+                self.GLOBAL_DEFAULTS["disable_ssl_verify"],
+            ))
+        )
+
     def _coerce_profile(self, name: str, key: str, raw: Any) -> Any:
         """分类级配置项。**不抛异常**；数值型的上下限在这里统一夹住。
 
@@ -719,6 +750,8 @@ class ConfigManager:
             # ★ 把「用不用 gh 认证」同步给 ghauth 模块。放在块尾：此时 data
             #   里所有键都已整理完。另一处同步在 set()（见 _apply_gh_auth）。
             self._apply_gh_auth()
+            # 同理：证书校验开关也必须在读盘后同步一次。
+            self._apply_ssl_verify()
 
     def _migrate(self, saved: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         """把任意历史版本的配置升到 ``CONFIG_VERSION``。
@@ -922,6 +955,8 @@ class ConfigManager:
             if key == "use_gh_auth":
                 # 开关类的外部同步：改了就得当场生效（不等重启、不等 save）。
                 self._apply_gh_auth()
+            elif key == "disable_ssl_verify":
+                self._apply_ssl_verify()
         else:
             # 不认识的键：以前是**静默忽略**。发布之后这很容易变成
             # 「界面改了但没生效」那种查不出来的问题，所以留一条 WARNING。

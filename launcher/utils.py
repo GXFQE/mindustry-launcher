@@ -42,17 +42,78 @@ __all__ = [
     "resource_path",
     "resolve_log_file",
     "setup_logging",
+    "ssl_context",
+    "set_ssl_verify",
     "zip_directory",
 ]
 
 # GitHub 直连在国内常撞上证书吊销检查失败（CRYPT_E_NO_REVOCATION_CHECK），
-# 所以对我们自己发起的那几个 HTTPS 请求不校验证书。
+# 所以默认**不校验**证书（= 本启动器一直以来的行为）。
 #
-# ⚠️ 以前这行是 ``ssl._create_default_https_context = _create_unverified_context``
+# ⚠️ 以前这里是 ``ssl._create_default_https_context = _create_unverified_context``
 # —— 那是**进程级**副作用：会把整个进程（包括别处 import 进来的库）的证书
-# 校验一起关掉。现在只把下面这个 context 显式传给自己的请求（download_file、
-# updates._fetch_release），影响面就只剩这两处。
+# 校验一起关掉。现在只把 context 显式传给自己的请求（download_file、
+# updates._fetch_release、selfupdate、mirrortest），影响面就只剩这几处。
+#
+# ★ 但这只是**绕路**，不是根因：用 S302 之类工具的人，根证书只注入到了
+#   Windows 系统证书库，而 Python 走 OpenSSL 自己的默认路径，未必读得到
+#   —— 表现出来就是「浏览器能上、启动器报证书错误」。所以做成了开关
+#   （配置里叫 ``disable_ssl_verify``，默认**开** = 不校验，保持历史行为）：
+#   要严格校验的人在设置页把「禁用校验」取消掉即可；要让它认自定义 CA，
+#   设 ``SSL_CERT_FILE`` 环境变量即可。
+#
+# ★ 这里（utils）只用**正向**说法：``set_ssl_verify(True)`` = 校验证书。
+#   配置键是反向的（禁用），取反在 config._apply_ssl_verify 一处完成 ——
+#   两套说法混着用，将来一定会有人把 True 当成「禁用」。
 UNVERIFIED_SSL_CTX = ssl._create_unverified_context()
+_VERIFIED_SSL_CTX: ssl.SSLContext | None = None
+_ssl_verify = False
+
+
+def set_ssl_verify(enabled: bool) -> None:
+    """开关 HTTPS 证书校验（配置读盘 / 改设置后由 config 同步过来）。
+
+    ★ 参数是**正向**的：True = 校验证书，False = 不校验（默认）。
+      配置里的 ``disable_ssl_verify`` 是反的，取反在 config 那边做。
+    ★ 只影响**本启动器自己发起**的那几个请求，不动进程级默认上下文。
+    """
+    global _ssl_verify
+    _ssl_verify = bool(enabled)
+    logger.info(
+        "HTTPS 证书校验已%s" % ("开启" if _ssl_verify else "关闭")
+    )  # i18n: keep —— 只进日志的诊断行
+
+
+def ssl_context() -> ssl.SSLContext:
+    """当前该用的 SSL context（按 ``disable_ssl_verify`` 开关，默认不校验）。
+
+    ★ 必须**每次调用时**取，不能在模块顶层把结果存成常量 —— 用户可以在
+      设置页里改这个开关，存成常量就得重启才生效。
+    """
+    global _VERIFIED_SSL_CTX
+    if not _ssl_verify:
+        return UNVERIFIED_SSL_CTX
+    if _VERIFIED_SSL_CTX is None:
+        try:
+            ctx = ssl.create_default_context()
+        except Exception as e:                                  # noqa: BLE001
+            # 连默认上下文都建不出来（极罕见）：退回不校验，别让下载直接死
+            logger.warning(f"建立证书校验上下文失败（{e}），本次不校验证书")
+            return UNVERIFIED_SSL_CTX
+        # ★ Windows 上 create_default_context() 只枚举**本机**证书库
+        #   （ROOT / CA），不读 OpenSSL 的默认路径 —— 也就是说
+        #   ``SSL_CERT_FILE`` 在这儿不会自动生效。S302 这类工具恰恰是把
+        #   根证书注入用户证书库，于是「浏览器能上、Python 报证书错误」。
+        #   这里显式补一次：环境变量指到哪张证书，就额外信哪张。
+        extra_ca = os.environ.get("SSL_CERT_FILE", "").strip()
+        if extra_ca and os.path.isfile(extra_ca):
+            try:
+                ctx.load_verify_locations(cafile=extra_ca)
+                logger.info(f"已额外信任 SSL_CERT_FILE 指定的证书: {extra_ca}")
+            except (OSError, ssl.SSLError) as e:
+                logger.warning(f"加载 SSL_CERT_FILE 失败（{e}），只用系统证书库")
+        _VERIFIED_SSL_CTX = ctx
+    return _VERIFIED_SSL_CTX
 
 # 实际使用（打包后的 exe）写的日志
 LOG_NAME = "launcher.log"
@@ -429,7 +490,7 @@ def download_file(
         ghauth.apply_auth(req)
         try:
             resp = urllib.request.urlopen(
-                req, timeout=30, context=UNVERIFIED_SSL_CTX
+                req, timeout=30, context=ssl_context()
             )
         except urllib.error.HTTPError as e:
             if e.code == 416 and skip > 0:

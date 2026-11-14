@@ -2000,6 +2000,35 @@ def test_gh_auth():
     check("老配置自动补上 use_gh_auth（默认关着）",
           saved3.get("use_gh_auth") is False
           and saved3.get("auto_update") is False, str(saved3)[:120])
+    check("老配置自动补上 disable_ssl_verify（默认禁用校验）",
+          saved3.get("disable_ssl_verify") is True, str(saved3)[:120])
+
+    # ---- disable_ssl_verify：跟 use_gh_auth 同一套「配置 <-> 模块状态」的规矩 ----
+    # 默认必须是**不校验**（历史行为）：换成校验会让一批代理环境下的人
+    # 直接下不动东西，那是发布之后最不该出现的回归。
+    # ★ 开关是**反向**的（「禁用校验」，默认勾上）：名字跟默认值必须同向 ——
+    #   默认不校验却摆一个没勾的「校验证书」，看着像本该打开却没打开。
+    import ssl as _ssl
+    from launcher.utils import ssl_context
+    f4 = sb / "c4.json"
+    f4.write_text(json.dumps({"disable_ssl_verify": "maybe"}),
+                  encoding="utf-8")
+    cm4 = ConfigManager(f4)
+    check("坏证书开关值退默认（默认禁用校验）",
+          cm4.get("disable_ssl_verify") is True
+          and ssl_context().verify_mode == _ssl.CERT_NONE,
+          f"{cm4.get('disable_ssl_verify')!r}")
+    cm4.set("disable_ssl_verify", False)
+    check("★ set('disable_ssl_verify', False) 当场切到校验上下文"
+          "（不等保存、不等重启）",
+          ssl_context().verify_mode == _ssl.CERT_REQUIRED)
+    cm4.set("disable_ssl_verify", "false")
+    check("★ 字符串 'false' 不许被当成真（bool('false') 是 True）",
+          cm4.get("disable_ssl_verify") is False
+          and ssl_context().verify_mode == _ssl.CERT_REQUIRED)
+
+    # 收尾：模块级状态不留给后面的用例（后面的下载测试跑的是本地 HTTP）。
+    cm4.set("disable_ssl_verify", True)
 
     # 恢复现场：后面的测试不该继承这一层的模块级状态。
     ghauth._enabled, ghauth._probed, ghauth._token, ghauth._status = saved
@@ -4059,6 +4088,20 @@ def test_cli_launch_args():
     check("镜像：不像地址就抛（不静默变成直连）",
           _raises(lambda: CLI_CFG.parse_value(spec_mirror, "不是地址"),
                   CLI_CFG.BadValue))
+    # 证书开关是发布之后才加的项：老版本没有它，新版本必须能 --get/--set，
+    # 而且**默认仍是「不校验」**（换默认 = 一批人突然下不动东西）。
+    # ★ 开关名跟默认同向：disable_ssl_verify 默认 True。
+    spec_ssl = next(
+        s for s in CLI_CFG.GLOBAL_SPECS if s.key == "disable_ssl_verify")
+    from launcher.config import ConfigManager as _CM
+    check("disable_ssl_verify 在设置表里，且默认禁用校验（保住历史行为）",
+          CLI_CFG.resolve("disable_ssl_verify").key == "disable_ssl_verify"
+          and _CM.GLOBAL_DEFAULTS["disable_ssl_verify"] is True)
+    check("disable_ssl_verify 能经 --set 开/关（坏值抛，不静默）",
+          CLI_CFG.parse_value(spec_ssl, "on") is True
+          and CLI_CFG.parse_value(spec_ssl, "off") is False
+          and _raises(lambda: CLI_CFG.parse_value(spec_ssl, "maybe"),
+                      CLI_CFG.BadValue))
 
     # ---- --set 的落盘顺序：改 → 回读内存 → 存 → 回读磁盘 ----
     cfg_mod = ast.parse(

@@ -54,7 +54,7 @@ from .ghauth import apply_auth
 from .i18n import t
 from .utils import (
     LAUNCHER_UPDATE_MODES,
-    UNVERIFIED_SSL_CTX,
+    ssl_context,
     atomic_write_json,
     download_file,
     normalize_launcher_update,
@@ -321,7 +321,7 @@ def fetch_latest_update(timeout: int = 6) -> dict | None:
         apply_auth(req)
         # 超时给短一点：这个请求在后台跑，卡住的每一秒都是白等
         with urllib.request.urlopen(
-            req, timeout=timeout, context=UNVERIFIED_SSL_CTX
+            req, timeout=timeout, context=ssl_context()
         ) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:

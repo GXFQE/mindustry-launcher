@@ -307,6 +307,26 @@ def main() -> int:
               find_widget(app.settings_frame, "Java 路径(JRE/JDK):") is not None)
         check("「检测」按钮在",
               find_widget(app.settings_frame, "检测") is not None)
+        # ★ 证书校验的开关是**反向**的（「禁用校验」，默认勾上），名字跟默认值
+        #   同向：默认不校验就别摆一个没勾的「校验证书」—— 那看着像本该打开
+        #   却没打开。老配置里没这个键时必须默认勾着（= 不校验），不勾等于
+        #   突然开始校验证书，代理环境下的人会直接下不动东西。
+        ssl_box = find_widget(
+            app.settings_frame, "禁用 HTTPS 证书校验（下载 / 检查更新）"
+        )
+        check("「禁用 HTTPS 证书校验」开关在", ssl_box is not None)
+        check("……且老配置下默认是勾着的（= 不校验，保住历史行为）",
+              ssl_box is not None
+              and app.disable_ssl_verify_var.get() is True,
+              str(ssl_box))
+        check("……它的说明也一起在（没有只剩一个光秃秃的勾选框）",
+              find_widget(
+                  app.settings_frame,
+                  "默认勾选（= 不校验）：国内直连常撞证书吊销检查失败，而 S302 这类"
+                  "工具的根证书只注入系统证书库、Python 读不到 —— 不校验反而连得"
+                  "上。取消勾选后，启动器自己的下载与检查更新会校验证书；自建 CA "
+                  "可把环境变量 SSL_CERT_FILE 指向证书文件。",
+              ) is not None)
         check("「直接删除」开关在",
               find_widget(
                   app.settings_frame,

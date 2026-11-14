@@ -158,8 +158,10 @@ REQUIRED = {
     "launcher.utils": [
         "resolve_log_file", "LOG_NAME", "DEV_LOG_NAME", "LOG_FILE_ENV", "LOG_FILE",
         # 不再改 ssl._create_default_https_context（进程级副作用），
-        # 改成只给自己的请求传这个 context
-        "UNVERIFIED_SSL_CTX",
+        # 改成只给自己的请求传这个 context；
+        # 2026-11-14：证书校验做成开关（config 里叫 disable_ssl_verify，
+        # utils 这层是正向的），context 必须**每次取**
+        "UNVERIFIED_SSL_CTX", "ssl_context", "set_ssl_verify",
         # 2026-09-22：开关值解析只有这一处实现（config.normalize_bool 是它的
         # 薄委托）—— sources.py 也要用，而它不能 import config（会绕成环）
         "parse_bool", "TRUE_WORDS", "FALSE_WORDS",
@@ -333,7 +335,7 @@ REQUIRED = {
         # 样本 1.5 MB、低于 MIN_OK_BYTES 当错误页（几 KB 的 502 页面
         # 不能算「快」）、单候选总预算、候选上限（清单来自 config.json）
         "TEST_URL", "SAMPLE_BYTES", "MIN_OK_BYTES", "MIRROR_BUDGET",
-        "SOCKET_TIMEOUT", "MAX_TARGETS", "UNVERIFIED_SSL_CTX",
+        "SOCKET_TIMEOUT", "MAX_TARGETS", "ssl_context",
         # ★ 2026-10-11 测速方法学改造：交错多轮（ROUNDS）+ 固定时长采样
         # （SAMPLE_SECONDS）+ 取中位（_aggregate_samples）+ 死候选退出
         # （_DEAD_STATUSES）+ 波动提示阈值（SPREAD_WARN）。少了这些 =

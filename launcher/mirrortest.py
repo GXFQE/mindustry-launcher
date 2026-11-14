@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from .utils import UNVERIFIED_SSL_CTX
+from .utils import ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +258,7 @@ def test_mirror(
     message = ""
     try:
         with urllib.request.urlopen(
-            req, timeout=socket_timeout, context=UNVERIFIED_SSL_CTX
+            req, timeout=socket_timeout, context=ssl_context()
         ) as resp:
             code = int(getattr(resp, "status", 0) or 0)
             if code != 200:

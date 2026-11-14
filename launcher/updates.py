@@ -15,7 +15,7 @@ from .ghauth import apply_auth
 from .i18n import t
 from .storage import VersionManager
 from .utils import (
-    UNVERIFIED_SSL_CTX,
+    ssl_context,
     download_file,
     download_tmp_path,
     parse_bool,
@@ -182,7 +182,7 @@ class UpdateManager:
             # 超时别给太长：这里卡住的每一秒都会变成「点了检查更新没反应」
             # 或者「关窗口关不掉」。GitHub API 正常一两秒就回。
             with urllib.request.urlopen(
-                req, timeout=5, context=UNVERIFIED_SSL_CTX
+                req, timeout=5, context=ssl_context()
             ) as resp:
                 data = json.loads(resp.read().decode())
             if not isinstance(data, list):

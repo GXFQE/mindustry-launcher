@@ -19,7 +19,7 @@
 跑法（示例）::
 
     python _tools/verify/selfupdate_e2e.py \
-        --app-dir  ../测试版本 \
+        --app-dir  ../产物/桌面版-测试安装 \
         --newer-dir D:/tmp/mdt_newer \
         --newer-version 9.9.9
 

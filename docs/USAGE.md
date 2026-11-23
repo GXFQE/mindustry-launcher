@@ -22,7 +22,7 @@ deleting a save profile is deliberately GUI-only, because it takes three confirm
 | `--set key=value …` | Change settings (writes `config.json` only, effective on the next start; several at once) |
 | `--export <version>` | Pack a version into a jar you can run with `java -jar`; accepts `--out` |
 | `--export-backup <profile> [timestamp]` | Pack one backup into a zip (omitting the timestamp means the newest); accepts `--out` |
-| `--import <jar> --as <version>` | Add a jar to the version library (`--type` changes the type; `Mindustry` by default). `--as` is required |
+| `--import <jar> [--as <version>]` | Add a jar to the version library (version / type are read from the jar; `--as` overrides the version, `--type` the type) |
 | `--restore-backup <profile> [timestamp]` | Restore one backup into the save folder (omitting the timestamp means the newest). **Needs `--yes`** |
 | `--delete-version <version>` | Delete a version (manifest plus unreferenced objects). **Needs `--yes`** |
 | `--delete-backup <profile> [timestamp]` | Delete one backup (omitting the timestamp means the newest). **Needs `--yes`** |
@@ -81,7 +81,7 @@ deleting a save profile is deliberately GUI-only, because it takes three confirm
 |---|---|
 | `0` | Finished normally (a finished game counts) |
 | `1` | The launcher itself failed |
-| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete or restore without `--yes`, `--import` without `--as`) |
+| `2` | Bad arguments (`--launch` with no version, `--set` with no `key=value`, a delete or restore without `--yes`, `--import` with no version in the jar and no `--as`) |
 | `3` | No such version / no such backup |
 | `4` | Version found, but the game did not start |
 | `5` | Export failed (while packing the jar / zip) |
@@ -99,16 +99,20 @@ and want it in the version list? Use `--import`. It is the same path as **Versio
 in the GUI.
 
 ```bat
-:: Import as Mindustry 146
-"Mindustry启动器.exe" --import "D:\Downloads\Mindustry-146.jar" --as 146
+:: The version is read from the jar itself (this one has build=146)
+"Mindustry启动器.exe" --import "D:\Downloads\Mindustry-146.jar"
 
-:: Import as MindustryX 160 (--type switches the type)
+:: A fork jar: the release name lives in mod.hjson, the type is detected too
+"Mindustry启动器.exe" --import "D:\Downloads\Desktop.jar"
+
+:: Only override the version / type if you need to
 "Mindustry启动器.exe" --import "D:\Downloads\Desktop.jar" --as 160 --type MindustryX
 ```
 
-- **`--as` is required** and never guessed from the file name — the version name becomes the manifest
-  filename and the row in the list, and a wrong one has to be deleted first. Without it you get exit
-  code `2` and not a single object is written.
+- **The version is read from the game itself**: `build` from `version.properties`; for forks
+  (MindustryX) `version` from `mod.hjson` at the jar root. Only when that fails (very old build, or
+  not a game jar) must you pass `--as`; otherwise you get exit code `2` and not a single object is
+  written — **the file name is never used to guess**.
 - **The same name is never overwritten**: importing 146 again while `Mindustry 146` exists is refused
   (exit code `8`). Delete it first (`--delete-version "Mindustry 146" --yes`) or pick another name.
 - **Refused while the launcher is running** (exit code `6`): its background GC would treat the freshly

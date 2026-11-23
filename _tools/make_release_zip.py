@@ -504,10 +504,11 @@ the "ENGLISH" line further down.
 
 · 导入一个本地 jar（就是界面里「管理版本 → 导入」）
 
-      "Mindustry启动器.exe" --import "D:\\下载\\Mindustry-146.jar" --as 146
+      "Mindustry启动器.exe" --import "D:\\下载\\Mindustry-146.jar"
 
-  --as 必须写：版本号会变成清单文件名和列表里那一行，不会从文件名猜。
-  想换类型加 --type（默认 Mindustry，另一个常见的是 MindustryX）。
+  版本号默认从 jar 本体读（官方版读 version.properties 的 build；MindustryX
+  读 jar 根的 mod.hjson），类型也一起认。读不到（很老的构建 / 不是游戏本体）
+  才需要 --as 指定；想覆盖读到的值也可以写 --as / --type。
   同名版本已存在时**拒绝覆盖**（退出码 8），要换就先 --delete-version。
 
 · 删掉一个版本 / 一份备份（不可逆）
@@ -901,12 +902,13 @@ IMPORTING / DELETING / RESTORING FROM THE CONSOLE
 
 - Import a local jar (the GUI's "管理版本 -> 导入")
 
-      "Mindustry启动器.exe" --import "D:\\Downloads\\Mindustry-146.jar" --as 146
+      "Mindustry启动器.exe" --import "D:\\Downloads\\Mindustry-146.jar"
 
-  --as is mandatory: the version name becomes the manifest filename and the row
-  in the list, and it is never guessed from the file name. --type changes the
-  type (Mindustry by default; MindustryX is the other common one). An existing
-  version of the same name is never overwritten (exit code 8) -- delete it with
+  The version is read from the jar itself (build in version.properties for
+  official builds; mod.hjson at the jar root for MindustryX), and the type is
+  detected too. Only pass --as when that fails (very old build / not a game
+  jar); --as / --type also override what was read. An existing version of the
+  same name is never overwritten (exit code 8) -- delete it with
   --delete-version first if that is what you want.
 
 - Delete a version / one backup (cannot be undone)

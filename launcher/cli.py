@@ -66,15 +66,17 @@
 ``--import <jar>``
     把一个 jar 收进版本库（就是界面「版本管理 → 导入」那条路），收完就能
     直接 ``--launch``。**只读那个 jar、不碰存档**。
-    ★ 必须同时给 ``--as``：版本号会变成清单文件名和界面里那一行，不能靠
-      文件名猜（``Mindustry.jar`` 这种名字里根本没有版本号）。
+    ★ 版本号默认**从 jar 本体读**（``version.properties`` 的 ``build``；
+      分支的 jar 读根目录 ``mod.hjson`` 的 ``version``），不靠人填、也不靠
+      文件名猜。读不到（老 jar / 不是游戏本体）才要求用 ``--as`` 明确指定。
 
 ``--as <版本号>``
-    ``--import`` 导入成什么版本号（如 ``146`` / ``BE v7``）。修饰词。
+    ``--import`` 导入成什么版本号（如 ``146`` / ``BE v7``）。修饰词；
+    **只在想覆盖 jar 里读到的版本号时才需要给**。
 
 ``--type <类型>``
-    ``--import`` 导入成什么版本类型，默认 ``Mindustry``（另一个常见的是
-    ``MindustryX``）。修饰词；只在导入时用得上。
+    ``--import`` 导入成什么版本类型。省略时从 jar 认（``MindustryX`` 的 jar
+    认得出），认不出才用 ``Mindustry``。修饰词；只在导入时用得上。
 
 ``--restore-backup <分类> [<时间戳>]``
     把一条存档备份**恢复进该分类的存档目录**（就是界面「管理备份 → 恢复
@@ -139,11 +141,13 @@ GET_FLAG = "--get"
 SET_FLAG = "--set"
 # 把一个 jar 收进版本库（就是界面「版本管理 → 导入」那条路）。
 IMPORT_FLAG = "--import"
-# 导入的版本号（修饰词，跟着 --import 用）。★ 必须给，不许从文件名猜。
+# 导入的版本号（修饰词，跟着 --import 用）。省略 = 从 jar 本体读；
+# 给了就以它为准备注（jar 里读不到时才必须给）。
 AS_FLAG = "--as"
-# 导入的版本类型（修饰词）。省略 = Mindustry。
+# 导入的版本类型（修饰词）。省略 = 从 jar 认（MindustryX 的 jar 认得出来），
+# 认不出才用 DEFAULT_VERSION_TYPE。
 TYPE_FLAG = "--type"
-# 导入时没写 --type 用的类型（和界面导入对话框的默认值一致）。
+# 导入时既没写 --type、jar 里也认不出类型时用的值（和界面默认值一致）。
 DEFAULT_VERSION_TYPE = "Mindustry"
 # 把一条存档备份恢复进存档目录（会覆盖当前存档）。不可逆，必须 --yes。
 RESTORE_BACKUP_FLAG = "--restore-backup"
@@ -228,7 +232,8 @@ class CliRequest:
     import_jar: str = ""
     #: 导入成什么版本号（``--as``）；空 = 没给（见 ``import_only``）
     import_name: str = ""
-    #: 导入成什么类型（``--type``）；空 = 用 ``DEFAULT_VERSION_TYPE``
+    #: 导入成什么类型（``--type``）；空 = 从 jar 认（认不出才用
+    #: ``DEFAULT_VERSION_TYPE``）
     import_type: str = ""
     #: 要恢复的备份所属分类（``--restore-backup``）；空串 = 不恢复
     restore_profile: str = ""
@@ -320,10 +325,10 @@ class CliRequest:
         把进程锁：启动器开着时它的后台回收会撞上来（导入刚写进去、清单还没
         落盘的那批对象，在它眼里是没有引用者的孤儿）。
 
-        ★ 没带 ``--as`` 时为假：那时 ``bad_usage`` 已经为真、入口会先答复，
-          这里再算「要导入」只会让调用方多一条要想的分支。
+        ★ 2026-11-23 起没带 ``--as`` 也算「要导入」：版本号从 jar 本体读
+          （``gameversion``），读不到才由 ``cli_import`` 报「补一个 --as」。
         """
-        return bool(self.import_jar and self.import_name)
+        return bool(self.import_jar)
 
     @property
     def restore_only(self) -> bool:
@@ -661,21 +666,15 @@ def parse_cli(argv: list[str]) -> CliRequest:
         return CliRequest(export=export, out=out)
     if profile:
         return CliRequest(export_profile=profile, export_backup=stamp, out=out)
-    # ★ 导入：jar 给了、版本号没给 → 按「参数写坏」答复（退出码 2），一个对象
-    #   都不写。版本号不许从文件名猜 —— ``Mindustry.jar`` 这种名字里根本没有
-    #   版本号，猜出来的名字会变成清单文件名，改起来还得先删一遍。
+    # ★ 导入：jar 给了就算「要导入」。**版本号默认从 jar 本体读**
+    #   （version.properties / mod.hjson，见 gameversion），不再要求手写
+    #   --as；读不到时由 cli_import 明确答复「补一个 --as」（退出码 2），
+    #   一个对象都不写 —— 名字会变成清单文件名，绝不从文件名猜。
     if import_jar:
-        if not import_name:
-            return CliRequest(
-                bad_usage=True,
-                bad_flag=AS_FLAG,
-                import_jar=import_jar,
-                import_type=import_type,
-            )
         return CliRequest(
             import_jar=import_jar,
             import_name=import_name,
-            import_type=import_type or DEFAULT_VERSION_TYPE,
+            import_type=import_type,
         )
     # ★ 会改数据的目标（恢复 / 删版本 / 删备份）：**没有 --yes 就一个字节都
     #   不动**，按「参数写坏」答复（退出码 2）。命令行没有「你确定吗」那一下，

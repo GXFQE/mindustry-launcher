@@ -212,7 +212,7 @@ REQUIRED = {
         # 老配置读进来就是 auto，靠的是「规格表里多一行」而不是一次迁移。
         "normalize_language", "LANGUAGE_AUTO",
     ],
-    "launcher.gui_versions": ["_gc_task", "sanitize_version_name"],
+    "launcher.gui_versions": ["_gc_task", "sanitize_version_name", "read_jar_info"],
     "launcher.gui_dialog": ["_is_link_like", "_ignore_links"],
     "launcher.gui_main": [
         # 自定义启动参数：校验（引号闭合）与危险项告警
@@ -480,7 +480,16 @@ REQUIRED = {
     "launcher.cli_import": [
         "run",
         "_import_version",
+        # 2026-11-23：版本号从 jar 本体读（界面那条路也用同一个模块）
+        "read_jar_info",
         "EXIT_IMPORT_FAILED", "EXIT_BAD_USAGE",
+    ],
+    # 2026-11-23 新增：从游戏本体读版本号。★ 不在包里 = exe 还是「导入必须
+    # 手填版本号」的旧逻辑，而窗口照样能打开、下载来的版本也照样能用 ——
+    # 只有「手动导入一个 jar」那条路会退化，平时根本看不见。
+    "launcher.gameversion": [
+        "JarInfo", "read_jar_info",
+        "VERSION_PROPERTIES", "MOD_HJSON", "GAME_CLASS", "FORK_PACKAGE",
     ],
     # 2026-10-28 新增：`--restore-backup` 的全部实现。
     # ★ 和 cli_delete 同一条路（零界面、同一把进程锁），但方向相反：它**写**

@@ -37,7 +37,8 @@ directory** at that profile. The game itself, the save format and the mod ecosys
 1. **Download** — grab a package from [Releases](../../releases/latest), extract it somewhere you have
    **write permission** (not `C:\Program Files`, not the Desktop), double-click `Mindustry启动器.exe`.
 2. **Get one version in** — press **Check for updates** to download one (set a mirror if GitHub is
-   slow), or **Manage versions → Import version** and pick a `desktop.jar` someone gave you.
+   slow), or **Manage versions → Import version** and pick a `desktop.jar` someone gave you
+   (the version and type are read from the jar automatically).
 3. **Play** — select it and press **Launch**. Want a second, independent save set? **Manage
    profiles** → create one → switch to it → launch again.
 

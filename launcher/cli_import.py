@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""``--import <jar> --as <版本号>``：把一个 jar 收进版本库。
+"""``--import <jar> [--as <版本号>]``：把一个 jar 收进版本库。
 
 为什么单独一个模块
 ------------------
@@ -10,9 +10,10 @@
 
 四条规矩
 --------
-1. **版本号必须显式给**（``--as``）。不做「从文件名推断」：``Mindustry.jar``
-   这种名字里根本没有版本号，猜出来的名字会变成清单文件名和界面上那一行，
-   要改还得先删一遍。和项目里「拿不到基线就退全量，绝不猜」是同一条。
+1. **版本号默认从游戏本体读**（``gameversion``：``version.properties`` 的
+   ``build``，分支读根目录 ``mod.hjson`` 的 ``version``），``--as`` 只用来
+   覆盖 / 兜底。**绝不从文件名猜**：``Mindustry.jar`` 这种名字里根本没有版本
+   号，猜出来的名字会变成清单文件名和界面上那一行，要改还得先删一遍。
 2. **同名不覆盖**。清单已存在就退出码 8 并说清楚 —— 命令行没有「要不要覆盖」
    那一下，静默盖掉一个已经装好的版本，用户下次点启动才会发现不对劲（而且
    旧版本的对象会被回收掉，回不去）。
@@ -44,6 +45,7 @@ from .cli import (
 )
 from .cli_info import acquire_data_lock, command_name, load_config, say
 from .config import ConfigManager, sanitize_version_name
+from .gameversion import read_jar_info
 from .i18n import apply_setting, t
 from .storage import VersionManager, open_version_manager
 from .utils import BASE_DIR
@@ -76,24 +78,39 @@ def _import_version(
     progress: Callable[[str], None],
 ) -> tuple[int, str]:
     """把 jar 收进版本库。返回 ``(退出码, 说给用户的话)``。"""
+    jar = Path(request.import_jar).expanduser()
+    if not jar.is_file():
+        # 版本号还没定（可能要从 jar 里读），先说清楚「文件都不在」。
+        return EXIT_IMPORT_FAILED, t("cli.import_jar_missing", path=jar)
+
+    # ★ 版本号默认从**游戏本体**读（version.properties 的 build / 分支
+    #   mod.hjson 的 version）。--as 只是覆盖；读不到才要求用户明说 ——
+    #   版本号会拼进清单文件名和列表里那一行，猜错比让人填一次更贵。
+    info = read_jar_info(jar)
+
     # ★ 先校验名字再做任何磁盘操作：版本号 / 类型都会拼进清单文件名，
     #   ``..\..\evil`` 这类输入必须在这里挡住（sanitize_version_name 就是
     #   干这个的，manifest_path 里也会再挡一次）。
     try:
+        detected_type = info.vtype if info else ""
         vtype = sanitize_version_name(
-            request.import_type or DEFAULT_VERSION_TYPE
+            request.import_type or detected_type or DEFAULT_VERSION_TYPE
         )
-        ver = sanitize_version_name(request.import_name)
+        raw_name = request.import_name or (info.version if info else "")
+        if not raw_name:
+            # 读不到（老构建 / 不是游戏本体）且没给 --as：一个对象都不写。
+            return EXIT_BAD_USAGE, t(
+                "cli.import_no_version", jar=jar, cmd=command_name()
+            )
+        ver = sanitize_version_name(raw_name)
     except ValueError as e:
         return EXIT_BAD_USAGE, t("cli.import_bad_name", err=e)
 
-    name = f"{vtype} {ver}"
-    jar = Path(request.import_jar).expanduser()
-    if not jar.is_file():
-        return EXIT_IMPORT_FAILED, t("cli.import_jar_missing", name=name, path=jar)
-
     manager = open_version_manager(BASE_DIR, config)
     vtype = _canonical_type(manager, vtype)
+    # 名字要在类型对齐到库里的写法**之后**再拼：``--type mindustry`` 被对齐成
+    # ``Mindustry`` 时，提示语里也该是后者（否则用户以为库里多了一个类型）。
+    name = f"{vtype} {ver}"
     manifest = manager.manifest_path(vtype, ver)
     if manifest.exists():
         # 不覆盖 —— 见模块说明第 2 条。想让位就先 --delete-version，或者换个 --as。
@@ -167,7 +184,9 @@ def run(request: CliRequest, has_console: bool) -> int:
         # 细节留在日志里就够了。
         logger.error(f"命令行导入失败：{e}", exc_info=True)
         code, text = EXIT_IMPORT_FAILED, t(
-            "cli.import_failed", name=request.import_name, err=e
+            "cli.import_failed",
+            name=request.import_name or request.import_jar,
+            err=e,
         )
     finally:
         lock.release()

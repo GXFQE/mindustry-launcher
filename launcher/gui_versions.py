@@ -8,10 +8,25 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from collections.abc import Callable
 
 from .config import sanitize_version_name
+from .gameversion import JarInfo, read_jar_info
 from .i18n import t
 from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
+
+
+def _import_hint(info: JarInfo | None) -> str:
+    """导入对话框下面那行灰字：版本号是从哪儿来的（或为什么没读到）。"""
+    if info is None:
+        return t("versions.detect_unreadable")
+    if not info.is_game:
+        return t("versions.detect_not_game")
+    if info.from_fork:
+        # 分支的发布号在 mod.hjson，version.properties 里是上游版本
+        return t("versions.detected_fork", ver=info.version, base=info.base)
+    if info.version:
+        return t("versions.detected", ver=info.version)
+    return t("versions.detect_failed")
 
 
 class VersionsMixin:
@@ -52,20 +67,42 @@ class VersionsMixin:
                 )
             if not jar_path:
                 return
+            # ★ 版本号从**游戏本体**读（jar 里的 version.properties /
+            #   mod.hjson），不再让用户凭记忆敲 —— 敲错了它会变成清单文件名
+            #   和列表里那一行。读不到就留空、退回手填（绝不猜）。
+            info = read_jar_info(Path(jar_path))
+            logger.info(f"导入前读 jar 版本：{jar_path} -> {info}")
             dlg = tk.Toplevel(win)
             dlg.title(t("versions.import_title"))
+            dlg.columnconfigure(1, weight=1)
             tk.Label(dlg, text=t("versions.type_label")).grid(
                 row=0, column=0, padx=5, pady=5, sticky=tk.W
             )
-            type_var = tk.StringVar(value="Mindustry")
+            type_var = tk.StringVar(
+                value=(info.vtype if info and info.vtype else "Mindustry")
+            )
             ttk.Combobox(
                 dlg, textvariable=type_var, values=["Mindustry", "MindustryX"]
-            ).grid(row=0, column=1)
+            ).grid(row=0, column=1, sticky=tk.EW)
             tk.Label(dlg, text=t("versions.number_label")).grid(
                 row=1, column=0, padx=5, pady=5, sticky=tk.W
             )
-            ver_var = tk.StringVar()
-            tk.Entry(dlg, textvariable=ver_var).grid(row=1, column=1)
+            ver_var = tk.StringVar(value=(info.version if info else ""))
+            entry = tk.Entry(dlg, textvariable=ver_var)
+            entry.grid(row=1, column=1, sticky=tk.EW)
+            hint = ttk.Label(
+                dlg,
+                text=_import_hint(info),
+                foreground="#555555",
+                # 这行提示可能比对话框宽（分支的「基于 Mindustry …」更长）：
+                # 给个折行宽度，别让它把窗口撑成一条长条。
+                wraplength=330,
+                justify=tk.LEFT,
+            )
+            hint.grid(
+                row=2, column=0, columnspan=2, sticky=tk.EW,
+                padx=5, pady=(0, 5),
+            )
 
             def do_import() -> None:
                 vtype = type_var.get()
@@ -82,11 +119,16 @@ class VersionsMixin:
                 )
 
             tk.Button(dlg, text=t("versions.import"), command=do_import).grid(
-                row=2, columnspan=2, pady=10
+                row=3, columnspan=2, pady=10
             )
             dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
-            self._fit_dialog(dlg, base_width=320, min_height=170)
+            self._fit_dialog(dlg, base_width=360, min_height=180)
             restore = self._begin_modal(dlg, win)
+            # 光标落在版本号上、整段选中：读对了直接回车，要改就直接覆盖。
+            # ★ 必须排在 _begin_modal 之后：它会 focus_force 窗口，先设的焦点
+            #   会被盖掉（用户还是得自己点一下输入框）。
+            entry.focus_set()
+            entry.selection_range(0, tk.END)
             dlg.wait_window()
             restore()
 

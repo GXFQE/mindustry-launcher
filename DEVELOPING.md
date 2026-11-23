@@ -51,7 +51,7 @@ launcher/               All source code
     cli_info.py         --list / --list-backups / --check-updates / --help: pure output, dispatched before importing tkinter (no window)
     cli_export.py       --export / --export-backup (pack a jar / zip; never touches the save folder)
     cli_cfg.py          --get / --set (writes config.json only; refuses while the launcher is running)
-    cli_import.py       --import (adds a jar to the version library; --as is mandatory)
+    cli_import.py       --import (adds a jar to the version library; the version is read from the jar, --as overrides it)
     cli_restore.py      --restore-backup (writes a backup back into the save folder; needs --yes)
     cli_delete.py       --delete-version / --delete-backup (manifest only; needs --yes)
     console.py          Talking to "the console you typed the command in" (attach to the parent console + encode per code page)

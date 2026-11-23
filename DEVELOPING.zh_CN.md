@@ -49,7 +49,7 @@ launcher/               全部源码
     cli_info.py         --list / --list-backups / --check-updates / --help：纯输出，在 import tkinter 之前分派（不建窗口）
     cli_export.py       --export / --export-backup（拼 jar / zip，绝不碰存档目录）
     cli_cfg.py          --get / --set（只写 config.json；启动器开着时拒绝）
-    cli_import.py       --import（把一个 jar 收进版本库，--as 必须给）
+    cli_import.py       --import（把一个 jar 收进版本库；版本号从 jar 本体读，--as 覆盖）
     cli_restore.py      --restore-backup（把备份写回存档目录，必须 --yes）
     cli_delete.py       --delete-version / --delete-backup（只删清单，必须 --yes）
     console.py          把话说给「敲命令的那个控制台」（附父进程控制台 + 按代码页编码）

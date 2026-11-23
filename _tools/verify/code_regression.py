@@ -591,6 +591,129 @@ def test_preheat_on_close():
     app2.cleanup_preheat()
 
 
+# ------------- 27. 从游戏本体读版本号（导入不再靠手写） -------------
+def test_jar_version_detection():
+    """导入版本时版本号从 jar 里读：官方读 version.properties，分支读 mod.hjson。
+
+    这条是「版本号不再靠手写」的地基：名字会变成清单文件名和列表里那一行，
+    读错了比让用户填一次更贵，所以三种「读不到」的情形（不是游戏本体 /
+    没有版本文件 / 值非法）都必须**返回空**，而不是猜一个。
+    """
+    print("\n[27] 从游戏本体读版本号")
+    from launcher.gameversion import read_jar_info
+
+    sb = Path(tempfile.mkdtemp()) / "jars"
+    sb.mkdir(parents=True, exist_ok=True)
+
+    def make(name, files, raw=None):
+        p = sb / name
+        if raw is not None:
+            p.write_bytes(raw)
+        else:
+            with zipfile.ZipFile(p, "w") as zf:
+                for rel, data in files.items():
+                    zf.writestr(rel, data)
+        return p
+
+    game_class = "mindustry/core/Version.class"
+    props = (
+        "#Sun Sep 03 23:54:51 EDT 2023\n"
+        "number=7\n"
+        "build=160.8\n"
+        "modifier=release\n"
+        "buildDate=November 18, 2026 20\\:24 PM\n"
+        "type=official\n"
+    )
+
+    official = make("official.jar", {
+        game_class: b"fake",
+        "version.properties": props,
+    })
+    info = read_jar_info(official)
+    check("官方 jar：build 就是版本号",
+          info is not None and info.is_game and info.version == "160.8"
+          and info.vtype == "Mindustry" and info.source == "version.properties",
+          str(info))
+    check("官方 jar：不是分支（不会假装有 mod.hjson）",
+          info is not None and not info.from_fork)
+    check("官方 jar：channel / modifier 一并读出来，供提示用",
+          info is not None and info.channel == "official"
+          and info.modifier == "release", str(info))
+
+    fork = make("fork.jar", {
+        game_class: b"fake",
+        "mindustryX/VarsX.class": b"fake",
+        "version.properties": "build=160.5\ntype=official\n",
+        "mod.hjson": (
+            "displayName: MindustryX Loader\n"
+            "name: MindustryX\n"
+            "author: WayZer\n"
+            "main: mindustryX.loader.Main\n"
+            'version: "2026.10.X38"\n'
+            'minGameVersion: "160.5"\n'
+            "hidden: true\n"
+        ),
+    })
+    info = read_jar_info(fork)
+    check("分支 jar：发布号来自 mod.hjson（不是上游 build）",
+          info is not None and info.version == "2026.10.X38"
+          and info.source == "mod.hjson", str(info))
+    check("分支 jar：上游版本留作提示（160.5）",
+          info is not None and info.base == "160.5" and info.from_fork,
+          str(info))
+    check("分支 jar：类型认得出 MindustryX",
+          info is not None and info.vtype == "MindustryX", str(info))
+
+    # mod 也有 mod.hjson，但没有游戏主类：绝不能当成游戏本体起名字
+    mod_only = make("mod.jar", {
+        "mod.hjson": 'name: SomeMod\nversion: "9.9"\n',
+        "SomeMod.class": b"fake",
+    })
+    info = read_jar_info(mod_only)
+    check("★ 普通 mod（没有 Version.class）⇒ 不算游戏本体、不给版本号",
+          info is not None and not info.is_game and info.version == "",
+          str(info))
+
+    # ★ 分支的 version.properties 是**上游**版本；发布号读不到时不能拿它冒充
+    fork_nover = make("fork_nover.jar", {
+        game_class: b"fake",
+        "mindustryX/VarsX.class": b"fake",
+        "version.properties": "build=160.5\n",
+    })
+    info = read_jar_info(fork_nover)
+    check("★ 分支但 mod.hjson 没有 version ⇒ 不拿上游 build 顶，留空手填",
+          info is not None and info.version == "" and info.base == "160.5",
+          str(info))
+
+    old = make("old.jar", {game_class: b"fake", "META-INF/MANIFEST.MF": "x"})
+    info = read_jar_info(old)
+    check("老构建（没有 version.properties）⇒ 版本号留空，让用户手填",
+          info is not None and info.is_game and info.version == "",
+          str(info))
+
+    weird = make("weird.jar", {
+        game_class: b"fake",
+        "version.properties": "build=../../evil\n",
+    })
+    info = read_jar_info(weird)
+    check("★ 读到非法版本号（带路径分隔符）⇒ 当作没读到，绝不写进文件名",
+          info is not None and info.version == "", str(info))
+
+    spaced = make("spaced.jar", {
+        game_class: b"fake",
+        "version.properties": "build = 147.1 \n",
+    })
+    info = read_jar_info(spaced)
+    check("值两边的空白会被抹掉", info is not None and info.version == "147.1",
+          str(info))
+
+    broken = make("broken.jar", None, raw=b"PK\x03\x04 not really a zip")
+    check("打不开的文件返回 None（不抛异常，界面才能显示一句人话）",
+          read_jar_info(broken) is None)
+    check("文件不存在也返回 None",
+          read_jar_info(sb / "nope.jar") is None)
+
+
 def main():
     # 故意制造的「对象丢失」是测试用例本身，别让它刷屏
     logging.getLogger("launcher.storage").setLevel(logging.CRITICAL)
@@ -621,6 +744,7 @@ def main():
     test_backup_delete_guard()
     test_update_check_strict()
     test_game_work_dir()
+    test_jar_version_detection()
     test_packed_required_table()
     print("\n" + "=" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
@@ -3991,19 +4115,19 @@ def test_cli_launch_args():
 
     # ---- --import / --as / --type：把一个 jar 收进版本库 ----
     r = req(["--import", r"D:\下载\Mindustry.jar", "--as", "146"])
-    check("--import + --as ⇒ 只导入（不启动、不建窗口），类型默认 Mindustry",
+    check("--import + --as ⇒ 只导入（不启动、不建窗口）；类型空着 = 让 jar 认",
           r.import_jar == r"D:\下载\Mindustry.jar"
-          and r.import_name == "146" and r.import_type == "Mindustry"
+          and r.import_name == "146" and r.import_type == ""
           and r.import_only and r.used, str(r))
     r = req(["--import=a.jar", "--as=146", "--type", "MindustryX"])
     check("--import / --as / --type 的等号写法同样认",
           r.import_jar == "a.jar" and r.import_name == "146"
           and r.import_type == "MindustryX" and r.import_only, str(r))
     r = req(["--import", "a.jar"])
-    check("★★ --import 不带 --as ⇒ 算参数写坏（一个对象都不许写），"
-          "bad_flag 点名是 --as —— 和 --yes 同一类：命令写全了，只差一句确认",
-          r.bad_usage and r.bad_flag == CLI.AS_FLAG
-          and r.import_jar == "a.jar" and not r.import_only, str(r))
+    check("★★ --import 不带 --as ⇒ 仍然只导入（版本号从 jar 本体读），"
+          "不再当成参数写坏",
+          r.import_only and r.import_name == "" and r.used
+          and not r.bad_usage, str(r))
     r = req(["--import"])
     check("--import 缺值 ⇒ 写坏，bad_flag 指出是它（不是 --as）",
           r.bad_usage and r.bad_flag == CLI.IMPORT_FLAG, str(r))

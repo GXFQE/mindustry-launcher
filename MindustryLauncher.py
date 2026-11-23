@@ -14,7 +14,7 @@
 启动器自己的其它命令行参数（``--launch <版本>`` / ``--list`` / ``--list-backups``
 / ``--check-updates`` / ``--help`` / ``--get [<键>]`` / ``--set <键>=<值>`` /
 ``--export <版本>`` / ``--export-backup <分类> [<时间戳>]`` / ``--out <路径>`` /
-``--import <jar> --as <版本号>`` / ``--restore-backup <分类> [<时间戳>]`` /
+``--import <jar> [--as <版本号>]`` / ``--restore-backup <分类> [<时间戳>]`` /
 ``--delete-version <版本>`` / ``--delete-backup <分类> [<时间戳>]`` /
 ``--yes``，见 ``launcher/cli.py``）
 在这里解析成 ``CliRequest`` 再分派 —— 解析规则和「版本名怎么匹配」都在那边，
@@ -35,10 +35,11 @@
   * ``--export`` / ``--export-backup`` —— **只产出文件**。同样在 ``import
     tkinter`` 之前交给 ``launcher/cli_export.py``：拼 jar / zip 不需要界面，
     只是慢（版本那边要读几千个 CAS 对象）。
-  * ``--import <jar> --as <版本号>`` —— **只往版本库里加一个版本**。同样在
+  * ``--import <jar>`` —— **只往版本库里加一个版本**。同样在
     ``import tkinter`` 之前交给 ``launcher/cli_import.py``：写几千个 CAS 对象
-    不需要界面，只是慢。也拿同一把进程锁（启动器开着时它的后台回收会把这批
-    还没被清单引用上的对象当孤儿）。
+    不需要界面，只是慢。版本号默认从 jar 本体读（``version.properties`` /
+    ``mod.hjson``），``--as`` 只用来覆盖。也拿同一把进程锁（启动器开着时它的
+    后台回收会把这批还没被清单引用上的对象当孤儿）。
   * ``--restore-backup <分类> [<时间戳>]`` —— **只把一个备份写回存档目录**。
     同样在 ``import tkinter`` 之前交给 ``launcher/cli_restore.py``。它比导入更
     该拿锁：启动器的自动备份线程正在读同一个存档目录。**必须带 ``--yes``**，
